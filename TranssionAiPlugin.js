@@ -5,8 +5,8 @@
 // @description  选中文本后显示AI助手，调用API生成内容并打开新标签页，支持全选和受限网站，集成飞书文档转Markdown功能
 // @author       hongxiang.zhou
 // @match        https://*.feishu.cn/docx/*
-// @downloadURL https://update.greasyfork.org/scripts/539953/%E4%BC%A0%E9%9F%B3AI%E5%8A%A9%E6%89%8B.user.js
-// @updateURL https://update.greasyfork.org/scripts/539953/%E4%BC%A0%E9%9F%B3AI%E5%8A%A9%E6%89%8B.meta.js
+// @downloadURL https://raw.githubusercontent.com/Loweiter/TranssionAiPlugin/refs/heads/main/TranssionAiPlugin.js
+// @updateURL https://raw.githubusercontent.com/Loweiter/TranssionAiPlugin/refs/heads/main/TranssionAiPlugin.js
 // ==/UserScript==
 
 (function () {
