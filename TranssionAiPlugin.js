@@ -7,6 +7,7 @@
 // @match        https://*.feishu.cn/docx/*
 // @downloadURL https://raw.githubusercontent.com/Loweiter/TranssionAiPlugin/refs/heads/main/TranssionAiPlugin.js
 // @updateURL https://raw.githubusercontent.com/Loweiter/TranssionAiPlugin/refs/heads/main/TranssionAiPlugin.js
+// @grant        GM_setClipboard
 // ==/UserScript==
 (function () {
     'use strict';
@@ -696,7 +697,7 @@
     function convertToMarkdown() {
         try {
             // 选择需要处理的节点
-            const nodesToProcess = document.querySelectorAll('.heading-h2, .heading-h3, .text-block, .image-block, table, .list-content, .inline-code');
+             const nodesToProcess = document.querySelectorAll('.heading-h2, .heading-h3, .text-block, .docx-image, table, .list-content, .inline-code, .code-block-content');
 
             // 定义一个空的 Map 对象来保存节点信息
             const nodes = new Map();
@@ -736,9 +737,9 @@
                             content = Array.from(textSet).join(''); // 转换 Set 为数组，并用 join 方法连接成字符串
                         }
                         break;
-                    case node.classList.contains('image-block'):
+                    case node.classList.contains('docx-image'):
                         type = 'img';
-                        content = 'https://';
+                        content = node.src;
                         break;
                     case node.tagName.toLowerCase() === 'table':
                         type = 'table-block';
@@ -757,6 +758,10 @@
                         break;
                     case node.classList.contains('list-content'):
                         type = 'list';
+                        content = node.textContent.trim().replace(/\u200B/g, '');
+                        break;
+                    case node.classList.contains('code-block-content'):
+                        type = 'code-block';
                         content = node.textContent.trim().replace(/\u200B/g, '');
                         break;
                     default:
@@ -788,8 +793,11 @@
                             markdownContent += node.content + '\n\n';
                         }
                         break;
+                    case 'code-block':
+                        markdownContent += '\`\`\`code\n' + node.content + '\n\`\`\`\n\n'
+                        break;
                     case 'img':
-                        markdownContent += '![](https://)' + '\n<br />\n\n';
+                        markdownContent += '![]('+node.content+')' + '\n<br />\n\n';
                         break;
                     case 'list':
                         markdownContent += '- ' + node.content + '\n\n'
