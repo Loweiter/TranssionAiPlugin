@@ -8,7 +8,6 @@
 // @downloadURL https://raw.githubusercontent.com/Loweiter/TranssionAiPlugin/refs/heads/main/TranssionAiPlugin.js
 // @updateURL https://raw.githubusercontent.com/Loweiter/TranssionAiPlugin/refs/heads/main/TranssionAiPlugin.js
 // ==/UserScript==
-
 (function () {
     'use strict';
     let currentUser = null;
@@ -451,7 +450,7 @@
         mdButton.addEventListener("click", handleMdButtonClick);
 
         // 监听键盘事件
-        document.addEventListener('keydown', function(e) {
+        document.addEventListener('keydown', function (e) {
             // ESC键关闭模态框
             if (e.key === 'Escape') {
                 closeMdModal();
@@ -649,7 +648,7 @@
         closeBtn.addEventListener('click', closeMdModal);
 
         // 点击背景关闭模态框
-        modal.addEventListener('click', function(e) {
+        modal.addEventListener('click', function (e) {
             if (e.target === modal) {
                 closeMdModal();
             }
@@ -2543,14 +2542,14 @@
     const originalXHROpen = XMLHttpRequest.prototype.open;
     const originalXHRSend = XMLHttpRequest.prototype.send;
 
-    XMLHttpRequest.prototype.open = function(method, url, ...args) {
+    XMLHttpRequest.prototype.open = function (method, url, ...args) {
         this._url = url;
         return originalXHROpen.apply(this, [method, url, ...args]);
     };
 
-    XMLHttpRequest.prototype.send = function(...args) {
+    XMLHttpRequest.prototype.send = function (...args) {
         if (this._url && this._url.includes('accounts/web/user')) {
-            this.addEventListener('readystatechange', function() {
+            this.addEventListener('readystatechange', function () {
                 if (this.readyState === 4 && this.status === 200) {
                     try {
                         const response = JSON.parse(this.responseText);
