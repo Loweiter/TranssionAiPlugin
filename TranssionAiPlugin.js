@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         传音AI助手
 // @namespace    http://tampermonkey.net/
-// @version      1.0.3
+// @version      1.0.4
 // @description  选中文本后显示AI助手，调用API生成内容并打开新标签页，支持全选和受限网站，集成飞书文档转Markdown功能
 // @author       hongxiang.zhou
 // @match        https://*.feishu.cn/docx/*
@@ -11,6 +11,7 @@
 // ==/UserScript==
 (function () {
     'use strict';
+    let currentContent = null;
     let currentUser = null;
     let aiButton = null;
     let inputBox = null;
@@ -39,6 +40,16 @@
     let tooltipTimer = null; // 提示框定时器
     let usageCount = 0; // 本次会话使用次数计数
     let mdButton = null; // Markdown 转换按钮
+    /// 全局变量
+    let collectionInterval = null;
+    let collectionInterval2 = null;
+    let collectedNodes = new Map(); // 用于存储收集到的节点，key为元素的唯一标识，value为节点信息
+
+
+    const originalXHROpen = XMLHttpRequest.prototype.open;
+    const originalXHRSend = XMLHttpRequest.prototype.send;
+
+    const scroller = createBruteForceScroller();
 
     // API配置
     const API_URL = "https://test-ai.palmplaystore.com/ai/open/HtmlAgent";
@@ -51,6 +62,31 @@
     createFloatingAiButton();
     // 创建Markdown转换按钮
     createMarkdownButton();
+
+
+    XMLHttpRequest.prototype.open = function (method, url, ...args) {
+        this._url = url;
+        return originalXHROpen.apply(this, [method, url, ...args]);
+    };
+
+    XMLHttpRequest.prototype.send = function (...args) {
+        if (this._url && this._url.includes('accounts/web/user')) {
+            this.addEventListener('readystatechange', function () {
+                if (this.readyState === 4 && this.status === 200) {
+                    try {
+                        const response = JSON.parse(this.responseText);
+                        if (response.data && response.data.user && response.data.user.name) {
+                            handleUserName(response.data.user.name, response.data.user);
+                        }
+                    } catch (e) {
+                        console.error('解析响应失败:', e);
+                    }
+                }
+            });
+        }
+        return originalXHRSend.apply(this, args);
+    };
+
 
     function initializeCopyUnlock() {
         // 检查当前网址是否匹配指定的域名
@@ -469,55 +505,60 @@
         const STORAGE_KEY = 'feishu_md_first_time';
         const isFirstTimeEver = !localStorage.getItem(STORAGE_KEY);
         const shouldShowTip = isFirstTimeEver && usageCount === 0;
-
         if (!isProcessing) {
             // 开始处理
             isProcessing = true;
-            mdButton.innerHTML = `结束获取`;
+            mdButton.innerHTML = `结束获取 (0)`;
             mdButton.className = "feishu-md-button danger";
-
+            // 开始自动收集
+            startAutoCollection();
             // 检查是否需要显示详细指导（首次使用）
             if (isFirstTimeEver && usageCount === 0) {
                 // 标记为非第一次使用（localStorage）
                 localStorage.setItem(STORAGE_KEY, 'false');
-
                 const modal = createDetailedMdModal();
-
                 // 25秒后自动隐藏
                 tooltipTimer = setTimeout(() => {
                     closeMdModal();
                 }, 25000);
             } else {
                 // 显示中间提示框 - 开始阶段
-                createMdCenterTip('全选内容，开始滑动', 'start');
+                createMdCenterTip('正在自动收集内容', 'start');
             }
-
             // 增加使用次数计数
             usageCount++;
-
         } else {
             // 结束处理，开始转换
             isProcessing = false;
-
+            // 停止自动收集
+            stopAutoCollection();
             // 关闭模态框
             closeMdModal();
-
             // 显示处理中状态
             setTimeout(() => {
                 mdButton.innerHTML = `
-                    <svg viewBox="0 0 24 24">
-                        <path d="M12,4V2A10,10 0 0,0 2,12H4A8,8 0 0,1 12,4Z">
-                            <animateTransform attributeName="transform" attributeType="XML" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/>
-                        </path>
-                    </svg>
-                    处理中...
-                `;
+                <svg viewBox="0 0 24 24">
+                    <path d="M12,4V2A10,10 0 0,0 2,12H4A8,8 0 0,1 12,4Z">
+                        <animateTransform attributeName="transform" attributeType="XML" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/>
+                    </path>
+                </svg>
+                处理中...
+            `;
                 mdButton.className = "feishu-md-button processing";
                 mdButton.disabled = true;
-
                 // 延迟一下再执行转换，确保页面渲染完成
                 setTimeout(() => {
-                    convertToMarkdown();
+                    convertCollectedToMarkdown();
+
+                    // 恢复按钮状态
+                    mdButton.innerHTML = `
+                    <svg viewBox="0 0 24 24">
+                        <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/>
+                    </svg>
+                    获取全文
+                `;
+                    mdButton.className = "feishu-md-button primary";
+                    mdButton.disabled = false;
                 }, 500);
             }, 500);
         }
@@ -537,7 +578,7 @@
         let icon, text, scrollHint;
 
         if (type === 'start') {
-            text = 'Ctrl+A 全选内容，并滑动获取内容';
+            text = '正在自动浏览内容中……';
             scrollHint = `
                 <div class="feishu-md-center-tip-scroll">
                     <span class="feishu-md-scroll-arrow">↓</span>
@@ -692,19 +733,30 @@
 
         return notification;
     }
+    // 获取DOM元素的唯一标识
+    function getElementHash(element) {
+        // 直接使用元素的outerHTML生成hash
+        const htmlContent = element.innerHTML + element.src;
 
-    // 转换为Markdown
-    function convertToMarkdown() {
+        // 生成hash值
+        return encodeURIComponent(htmlContent);
+    }
+    // 收集页面内容的函数
+    function collectPageContent() {
         try {
             // 选择需要处理的节点
-             const nodesToProcess = document.querySelectorAll('.heading-h2, .heading-h3, .text-block, .docx-image, table, .list-content, .inline-code, .code-block-content');
-
-            // 定义一个空的 Map 对象来保存节点信息
-            const nodes = new Map();
-
-            // 遍历节点，将节点信息保存到 nodes 中
+            const nodesToProcess = document.querySelectorAll('.heading-h2, .heading-h3,.heading-h4, .text-block, .docx-image, table, .list-content, .inline-code, .code-line-wrapper');
+            // 遍历节点，收集内容
             nodesToProcess.forEach((node) => {
+                // 获取元素的唯一标识
+                const elementHash = getElementHash(node);
+
+                // 如果这个元素已经被收集过，直接跳过
+                if (collectedNodes.has(elementHash)) {
+                    return;
+                }
                 let type, content;
+
                 switch (true) {
                     case node.classList.contains('heading-h2'):
                         type = 'heading-h2';
@@ -712,6 +764,10 @@
                         break;
                     case node.classList.contains('heading-h3'):
                         type = 'heading-h3';
+                        content = node.textContent.trim().replace(/\u200B/g, '');
+                        break;
+                    case node.classList.contains('heading-h4'):
+                        type = 'heading-h4';
                         content = node.textContent.trim().replace(/\u200B/g, '');
                         break;
                     case node.classList.contains('text-block'):
@@ -744,7 +800,6 @@
                     case node.tagName.toLowerCase() === 'table':
                         type = 'table-block';
                         content = { rows: [] };
-
                         // 将表格中的行和列数据保存到 content.rows 中
                         var rows = node.querySelectorAll('tr');
                         rows.forEach((row) => {
@@ -760,25 +815,87 @@
                         type = 'list';
                         content = node.textContent.trim().replace(/\u200B/g, '');
                         break;
-                    case node.classList.contains('code-block-content'):
+                    case node.classList.contains('code-line-wrapper'):
                         type = 'code-block';
                         content = node.textContent.trim().replace(/\u200B/g, '');
                         break;
                     default:
                         break;
                 }
-
-                if (content) {
-                    const nodeId = nodes.size + 1;
-                    const nodeObj = { type: type, content: content, order: nodeId };
-                    nodes.set(nodeId, nodeObj);
+                // 如果有内容，添加到集合中
+                if (content && (typeof content === 'string' ? content.trim() : true)) {
+                    const nodeObj = {
+                        type: type,
+                        content: content,
+                        elementHash: elementHash,
+                        timestamp: Date.now(),
+                        element: node, // 保存原始元素引用，用于排序
+                        documentOrder: getDocumentOrder(node) // 获取在文档中的顺序
+                    };
+                    collectedNodes.set(elementHash, nodeObj);
                 }
             });
+            // 更新按钮文本显示收集的数量
+            if (isProcessing) {
+                const count = collectedNodes.size;
+                mdButton.innerHTML = `结束获取 (${count})`;
+            }
+        } catch (error) {
+            console.warn("收集内容时出现错误:", error);
+        }
+    }
+    // 获取元素在文档中的顺序（用于排序）
+    function getDocumentOrder(element) {
+        let order = 0;
+        let current = element;
+
+        // 计算元素在文档中的大致位置
+        while (current && current.parentNode) {
+            let sibling = current.previousSibling;
+            while (sibling) {
+                order++;
+                sibling = sibling.previousSibling;
+            }
+            current = current.parentNode;
+            order += 1000; // 每层级增加1000，确保层级差异
+        }
+
+        return order;
+    }
+    // 开始自动收集
+    function startAutoCollection() {
+        // 清空之前收集的内容
+        collectedNodes.clear();
+
+        collectPageContent();
+        scroller.start(); // 开始滚动
+        collectionInterval = setInterval(collectPageContent, 100);
+        collectionInterval2 = setInterval(function () {
+            if (!scroller.getStatus().active) {
+                handleMdButtonClick()
+            }
+        }, 100);
+    }
+    // 停止自动收集
+    function stopAutoCollection() {
+        if (collectionInterval) {
+            scroller.stop()
+            clearInterval(collectionInterval);
+            clearInterval(collectionInterval2);
+            collectionInterval = null;
+            collectionInterval2 = null;
+        }
+    }
+    // 转换收集到的内容为Markdown
+    function convertCollectedToMarkdown() {
+        try {
+            // 将Map转换为数组并按照在页面中的位置排序
+            const nodesArray = Array.from(collectedNodes.values());
 
             // 将节点信息转换为 Markdown 格式的文本
             let markdownContent = '';
-            for (let i = 1; i <= nodes.size; i++) {
-                const node = nodes.get(i);
+
+            nodesArray.forEach((node) => {
                 switch (node.type) {
                     case 'heading-h2':
                         markdownContent += '## ' + node.content + '\n\n';
@@ -786,77 +903,69 @@
                     case 'heading-h3':
                         markdownContent += '### ' + node.content + '\n\n';
                         break;
+                    case 'heading-h4':
+                        markdownContent += '#### ' + node.content + '\n\n';
+                        break;
                     case 'text-block':
-                        // 判断文本节点是否在表格中
-                        if (!node.closest || !node.closest('table')) {
-                            // 节点不在表格中
-                            markdownContent += node.content + '\n\n';
-                        }
+                        markdownContent += node.content + '\n\n';
                         break;
                     case 'code-block':
-                        markdownContent += '\`\`\`code\n' + node.content + '\n\`\`\`\n\n'
+                        markdownContent += '```code\n' + node.content + '\n```\n';
                         break;
                     case 'img':
-                        markdownContent += '![]('+node.content+')' + '\n<br />\n\n';
+                        markdownContent += '![](' + node.content + ')' + '\n<br />\n\n';
                         break;
                     case 'list':
-                        markdownContent += '- ' + node.content + '\n\n'
+                        markdownContent += '- ' + node.content + '\n\n';
                         break;
                     case 'table-block':
                         var table = node.content;
                         var rows = table.rows;
-                        var columnCount = rows[0].length;
-                        var rowCount = rows.length;
-
-                        // 表头
-                        markdownContent += '|';
-                        for (let i = 0; i < columnCount; i++) {
-                            markdownContent += rows[0][i] + '|';
-                        }
-                        markdownContent += '\n|';
-                        for (let i = 0; i < columnCount; i++) {
-                            markdownContent += ':---:|';
-                        }
-                        markdownContent += '\n';
-
-                        // 表格内容
-                        for (let i = 1; i < rowCount; i++) {
-                            const row = rows[i];
+                        if (rows.length > 0) {
+                            var columnCount = rows[0].length;
+                            var rowCount = rows.length;
+                            // 表头
                             markdownContent += '|';
-                            for (let j = 0; j < columnCount; j++) {
-                                markdownContent += row[j] + '|';
+                            for (let i = 0; i < columnCount; i++) {
+                                markdownContent += rows[0][i] + '|';
+                            }
+                            markdownContent += '\n|';
+                            for (let i = 0; i < columnCount; i++) {
+                                markdownContent += ':---:|';
+                            }
+                            markdownContent += '\n';
+                            // 表格内容
+                            for (let i = 1; i < rowCount; i++) {
+                                const row = rows[i];
+                                markdownContent += '|';
+                                for (let j = 0; j < columnCount; j++) {
+                                    markdownContent += row[j] + '|';
+                                }
+                                markdownContent += '\n';
                             }
                             markdownContent += '\n';
                         }
-                        markdownContent += '\n';
                         break;
                     default:
                         break;
                 }
-            }
-
-            // 复制到剪贴板
+            });
+            // currentContent = markdownContent;
+            // createMdNotification("获取成功", `已收集${collectedNodes.size}个内容块`, "success");
+            // // 复制到剪贴板
             navigator.clipboard.writeText(markdownContent).then(() => {
                 console.log("Markdown content copied to clipboard.");
-                createMdNotification("复制成功", "", "success");
+                console.log("收集到的节点数量:", collectedNodes.size);
+                console.log("Markdown内容预览:", markdownContent.slice(0, 500) + "...");
+                createMdNotification("复制成功", `已收集${collectedNodes.size}个内容块`, "success");
             }, () => {
                 console.error("Failed to copy Markdown content to clipboard.");
+                console.log("Markdown内容:", markdownContent);
                 createMdNotification("复制失败", "请手动复制控制台内容", "error");
             });
-
         } catch (error) {
             console.error("转换过程中出现错误:", error);
             createMdNotification("转换错误", "转换失败，请重试", "error");
-        } finally {
-            // 恢复按钮状态
-            mdButton.innerHTML = `
-                <svg viewBox="0 0 24 24">
-                    <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/>
-                </svg>
-                获取全文
-            `;
-            mdButton.className = "feishu-md-button primary";
-            mdButton.disabled = false;
         }
     }
 
@@ -2397,7 +2506,6 @@
         */
     }
 
-    // 处理提示词提交
     // 处理提示词提交 - 修改以支持图片
     async function handlePromptSubmit(text, prompt, images = []) {
         console.log('Selected text:', text);
@@ -2408,11 +2516,10 @@
             // 组合完整的提示词
             let fullPrompt = '';
             if (text && prompt) {
-                fullPrompt = `当前用户选择的内容是###${text}###，当前用户的需求是###${prompt}###`;
+                fullPrompt = `当前用户选择的内容是###${text}###，\n\n当前用户的需求是###${prompt}###`;
             } else if (prompt) {
-                fullPrompt = `当前用户的需求是###${prompt}###`;
-            } else if (images.length > 0) {
-                fullPrompt = `用户上传了${images.length}张图片，请分析处理`;
+                fullPrompt = `--- 用户需求 ---\n
+                当前用户的需求是###${prompt}###`;
             }
 
             // 准备POST数据
@@ -2547,31 +2654,6 @@
 
         document.body.removeChild(textArea);
     }
-    const originalXHROpen = XMLHttpRequest.prototype.open;
-    const originalXHRSend = XMLHttpRequest.prototype.send;
-
-    XMLHttpRequest.prototype.open = function (method, url, ...args) {
-        this._url = url;
-        return originalXHROpen.apply(this, [method, url, ...args]);
-    };
-
-    XMLHttpRequest.prototype.send = function (...args) {
-        if (this._url && this._url.includes('accounts/web/user')) {
-            this.addEventListener('readystatechange', function () {
-                if (this.readyState === 4 && this.status === 200) {
-                    try {
-                        const response = JSON.parse(this.responseText);
-                        if (response.data && response.data.user && response.data.user.name) {
-                            handleUserName(response.data.user.name, response.data.user);
-                        }
-                    } catch (e) {
-                        console.error('解析响应失败:', e);
-                    }
-                }
-            });
-        }
-        return originalXHRSend.apply(this, args);
-    };
 
     // 处理获取到的用户名的函数
     function handleUserName(userName, userInfo) {
@@ -2600,6 +2682,164 @@
             .replace(/[\u200A\u2009\u2008\u2007\u2006\u2005\u2004\u2003\u2002\u2001\u2000]/g, ' ')
             .trim();
     }
+    /**
+     * 暴力全局滚动器
+     * @param {Object} options - 配置选项
+     * @returns {Object} 控制对象
+     */
+    function createBruteForceScroller(options = {}) {
+        // 默认配置
+        const config = {
+            step: 20,                    // 每次滚动的像素
+            interval: 50,                // 滚动间隔(毫秒)
+            scrollDuration: 20,         // 连续滚动次数后暂停
+            pauseDuration: 300,          // 暂停时间(毫秒)
+            maxNoScrollCount: 5,        // 连续无滚动次数阈值
+            autoStop: true,              // 是否自动停止
+            onStart: null,               // 开始回调
+            onStop: null,                // 停止回调
+            onAutoStop: null,            // 自动停止回调
+            onProgress: null,            // 进度回调 (scrollCount, noScrollCount)
+            ...options
+        };
+
+        // 状态变量
+        let active = false;
+        let timer = null;
+        let scrollCount = 0;
+        let noScrollCount = 0;
+
+        /**
+         * 暴力滚动核心方法
+         */
+        function bruteForceScroll() {
+            let hasScrolled = false;
+
+            // 滚动所有可滚动元素
+            document.querySelectorAll('*').forEach(el => {
+                try {
+                    if (el.scrollHeight > el.clientHeight) {
+                        const oldScrollTop = el.scrollTop;
+                        el.scrollTop += config.step;
+
+                        if (el.scrollTop > oldScrollTop) {
+                            hasScrolled = true;
+                        }
+                    }
+                } catch (e) { }
+            });
+
+            // 滚动页面
+            const oldPageScrollY = window.pageYOffset || document.documentElement.scrollTop;
+            window.scrollBy(0, config.step);
+            const newPageScrollY = window.pageYOffset || document.documentElement.scrollTop;
+
+            if (newPageScrollY > oldPageScrollY) {
+                hasScrolled = true;
+            }
+
+            // 检查是否到达底部
+            if (!hasScrolled) {
+                noScrollCount++;
+
+                if (config.autoStop && noScrollCount >= config.maxNoScrollCount) {
+                    stop(true); // 自动停止
+                    return;
+                }
+            } else {
+                noScrollCount = 0;
+            }
+
+            scrollCount++;
+
+            // 进度回调
+            if (config.onProgress) {
+                config.onProgress(scrollCount, noScrollCount);
+            }
+
+            // 检查是否需要暂停
+            if (scrollCount >= config.scrollDuration) {
+                clearInterval(timer);
+                scrollCount = 0;
+
+                setTimeout(() => {
+                    if (active) {
+                        timer = setInterval(bruteForceScroll, config.interval);
+                    }
+                }, config.pauseDuration);
+            }
+        }
+
+        /**
+         * 开始滚动
+         */
+        function start() {
+            if (active) return false;
+
+            active = true;
+            scrollCount = 0;
+            noScrollCount = 0;
+            timer = setInterval(bruteForceScroll, config.interval);
+
+            if (config.onStart) {
+                config.onStart();
+            }
+
+            return true;
+        }
+
+        /**
+         * 停止滚动
+         * @param {boolean} isAutoStop - 是否为自动停止
+         */
+        function stop(isAutoStop = false) {
+            if (!active) return false;
+
+            clearInterval(timer);
+            active = false;
+            scrollCount = 0;
+            noScrollCount = 0;
+            timer = null;
+
+            if (isAutoStop && config.onAutoStop) {
+                config.onAutoStop();
+            }
+
+            if (config.onStop) {
+                config.onStop(isAutoStop);
+            }
+
+            return true;
+        }
+
+        /**
+         * 切换滚动状态
+         */
+        function toggle() {
+            return active ? stop() : start();
+        }
+
+        /**
+         * 获取当前状态
+         */
+        function getStatus() {
+            return {
+                active,
+                scrollCount,
+                noScrollCount
+            };
+        }
+
+        // 返回控制对象
+        return {
+            start,
+            stop,
+            toggle,
+            getStatus,
+            isActive: () => active
+        };
+    }
+
     // 全局事件监听
     document.addEventListener('click', function (e) {
         if (aiButton && !aiButton.contains(e.target)) {
