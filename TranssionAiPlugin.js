@@ -148,7 +148,7 @@
             .feishu-md-button {
                 position: fixed !important;
                 right: 20px !important;
-                top: 170px !important;
+                top: 120px !important;
                 z-index: 10000 !important;
                 min-width: 80px !important;
                 height: 32px !important;
@@ -516,11 +516,11 @@
             if (isFirstTimeEver && usageCount === 0) {
                 // 标记为非第一次使用（localStorage）
                 localStorage.setItem(STORAGE_KEY, 'false');
-                const modal = createDetailedMdModal();
+                // const modal = createDetailedMdModal();
                 // 25秒后自动隐藏
-                tooltipTimer = setTimeout(() => {
-                    closeMdModal();
-                }, 25000);
+                // tooltipTimer = setTimeout(() => {
+                // closeMdModal();
+                // }, 25000);
             } else {
                 // 显示中间提示框 - 开始阶段
                 createMdCenterTip('正在自动收集内容', 'start');
@@ -647,40 +647,41 @@
             <div class="feishu-md-modal-title">📋 飞书文档转 Markdown 使用指南</div>
 
             <div class="feishu-md-modal-text">
-                欢迎使用飞书文档转换工具！此工具可以将飞书文档内容转换为 Markdown 格式并复制到剪贴板。
+                欢迎使用飞书文档转换工具！此工具将自动扫描获取文档内容，并支持智能问答功能。
             </div>
 
             <div class="feishu-md-modal-steps">
                 <div class="feishu-md-modal-step">
-                    <div class="feishu-md-modal-step-title">第一步：全选文档内容</div>
+                    <div class="feishu-md-modal-step-title">第一步：自动滚动扫描</div>
                     <div class="feishu-md-modal-step-desc">
-                        按快捷键 <span class="feishu-md-kbd">Ctrl</span> + <span class="feishu-md-kbd">A</span> 全选文档所有内容，或手动选择需要转换的部分内容。
+                        工具将自动滚动页面，获取文档的全部内容。飞书采用懒加载机制，需要滚动到对应位置才能加载内容。
                     </div>
                 </div>
 
                 <div class="feishu-md-modal-step">
-                    <div class="feishu-md-modal-step-title">第二步：确保内容完全加载</div>
+                    <div class="feishu-md-modal-step-title">第二步：控制扫描进度</div>
                     <div class="feishu-md-modal-step-desc">
-                        从文档开头快速滚动到结尾，让所有文本、图片、表格等内容加载显示。飞书采用懒加载机制，只有滚动到的内容才会被渲染。
+                        你可以<strong>点击"结束获取"按钮提前结束扫描</strong>，或者等待系统自动扫描到文档结尾后自动结束。
                     </div>
                 </div>
 
                 <div class="feishu-md-modal-step">
-                    <div class="feishu-md-modal-step-title">第三步：完成转换</div>
+                    <div class="feishu-md-modal-step-title">第三步：智能问答</div>
                     <div class="feishu-md-modal-step-desc">
-                        内容加载完成后，<strong>点击右侧的"结束获取"按钮开始转换</strong>。转换完成后，Markdown 内容将自动复制到剪贴板。
+                        扫描完成后，你可以<strong>针对文档内容进行提问</strong>，工具将基于获取的内容为你提供智能回答。
                     </div>
                 </div>
             </div>
 
             <div class="feishu-md-tip">
-                💡 <strong>小贴士：</strong>记得从文章开始到结束，不然会截断。
+                💡 <strong>小贴士：</strong>扫描过程中请保持页面活跃状态，完成后即可开始智能问答。
             </div>
 
             <div class="feishu-md-progress">
                 <div class="feishu-md-progress-bar"></div>
             </div>
         `;
+
 
         modal.appendChild(modalContent);
         document.body.appendChild(modal);
@@ -736,7 +737,7 @@
     // 获取DOM元素的唯一标识
     function getElementHash(element) {
         // 直接使用元素的outerHTML生成hash
-        const htmlContent = element.innerHTML + element.src;
+        const htmlContent = element.innerHTML + element.src + element.textContent + element.getAttribute('data-line-num');
 
         // 生成hash值
         return encodeURIComponent(htmlContent);
@@ -817,7 +818,7 @@
                         break;
                     case node.classList.contains('code-line-wrapper'):
                         type = 'code-block';
-                        content = node.textContent.trim().replace(/\u200B/g, '');
+                        content = node.textContent;
                         break;
                     default:
                         break;
@@ -910,7 +911,7 @@
                         markdownContent += node.content + '\n\n';
                         break;
                     case 'code-block':
-                        markdownContent += '```code\n' + node.content + '\n```\n';
+                        markdownContent += node.content + '\n';
                         break;
                     case 'img':
                         markdownContent += '![](' + node.content + ')' + '\n<br />\n\n';
@@ -956,7 +957,6 @@
             navigator.clipboard.writeText(markdownContent).then(() => {
                 console.log("Markdown content copied to clipboard.");
                 console.log("收集到的节点数量:", collectedNodes.size);
-                console.log("Markdown内容预览:", markdownContent.slice(0, 500) + "...");
                 createMdNotification("复制成功", `已收集${collectedNodes.size}个内容块`, "success");
             }, () => {
                 console.error("Failed to copy Markdown content to clipboard.");
@@ -1678,22 +1678,21 @@
         // 创建输入框容器
         inputBox = document.createElement('div');
         inputBox.style.cssText = `
-        position: fixed;
-        left: ${rect.left}px;
-        top: ${rect.bottom + 20}px;
-        background: linear-gradient(145deg, rgba(255,255,255,0.1), rgba(255,255,255,0.05));
-        backdrop-filter: blur(20px);
-        border: 1px solid rgba(255,255,255,0.2);
-        border-radius: 16px;
-        padding: 20px;
-        z-index: 10001;
-        box-shadow: 0 20px 60px rgba(0,0,0,0.1), 0 0 0 1px rgba(255,255,255,0.1);
-        min-width: 400px;
-        max-width: 500px;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        animation: inputBoxSlideIn 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-        transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-    `;
+            position: fixed;
+            left: ${rect.left}px;
+            top: ${rect.bottom + 20}px;
+            background: linear-gradient(145deg, rgba(255,255,255,0.1), rgba(255,255,255,0.05));
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 16px;
+            padding: 20px;
+            z-index: 10001;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.1), 0 0 0 1px rgba(255,255,255,0.1);
+            width: 400px;  /* 固定宽度，替换 min-width 和 max-width */
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            animation: inputBoxSlideIn 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+        `;
 
         // 创建标题栏
         const titleBar = document.createElement('div');
@@ -2518,8 +2517,7 @@
             if (text && prompt) {
                 fullPrompt = `当前用户选择的内容是###${text}###，\n\n当前用户的需求是###${prompt}###`;
             } else if (prompt) {
-                fullPrompt = `--- 用户需求 ---\n
-                当前用户的需求是###${prompt}###`;
+                fullPrompt = `--- 用户需求 ---\n当前用户的需求是###${prompt}###`;
             }
 
             // 准备POST数据
@@ -2691,9 +2689,9 @@
         // 默认配置
         const config = {
             step: 20,                    // 每次滚动的像素
-            interval: 50,                // 滚动间隔(毫秒)
+            interval: 25,                // 滚动间隔(毫秒)
             scrollDuration: 20,         // 连续滚动次数后暂停
-            pauseDuration: 300,          // 暂停时间(毫秒)
+            pauseDuration: 200,          // 暂停时间(毫秒)
             maxNoScrollCount: 5,        // 连续无滚动次数阈值
             autoStop: true,              // 是否自动停止
             onStart: null,               // 开始回调
