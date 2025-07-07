@@ -745,7 +745,7 @@
     function collectPageContent() {
         try {
             // 选择需要处理的节点
-            const nodesToProcess = document.querySelectorAll('.heading-h2, .heading-h3,.heading-h4, .text-block, .docx-image, table, .list-content, .inline-code, .code-line-wrapper');
+            const nodesToProcess = document.querySelectorAll('.heading-h2, .heading-h3,.heading-h4, .docx-text-block, .docx-image, table, .list-content, .inline-code, .code-line-wrapper');
             // 遍历节点，收集内容
             nodesToProcess.forEach((node) => {
                 // 获取元素的唯一标识
@@ -770,7 +770,7 @@
                         type = 'heading-h4';
                         content = node.textContent.trim().replace(/\u200B/g, '');
                         break;
-                    case node.classList.contains('text-block'):
+                    case node.classList.contains('docx-text-block'):
                         // 排除表格
                         if (!node.closest || !node.closest('table')) {
                             const spans = node.querySelectorAll('span');
