@@ -482,7 +482,8 @@
             获取全文
         `;
         mdButton.className = "feishu-md-button primary";
-        document.body.appendChild(mdButton);
+        // 暂时不开放
+        // document.body.appendChild(mdButton);
 
         mdButton.addEventListener("click", handleMdButtonClick);
 
