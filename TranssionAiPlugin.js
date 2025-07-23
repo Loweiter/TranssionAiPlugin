@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         传音AI助手
 // @namespace    http://tampermonkey.net/
-// @version      1.0.4
+// @version      1.0.5
 // @description  选中文本后显示AI助手，调用API生成内容并打开新标签页，支持全选和受限网站，集成飞书文档转Markdown功能
 // @author       hongxiang.zhou
-// @match        https://*.feishu.cn/docx/*
+// @match        https://*.feishu.cn/*/*
 // @downloadURL https://raw.githubusercontent.com/Loweiter/TranssionAiPlugin/refs/heads/main/TranssionAiPlugin.js
 // @updateURL https://raw.githubusercontent.com/Loweiter/TranssionAiPlugin/refs/heads/main/TranssionAiPlugin.js
 // @grant        GM_setClipboard
@@ -45,14 +45,14 @@
     let collectionInterval2 = null;
     let collectedNodes = new Map(); // 用于存储收集到的节点，key为元素的唯一标识，value为节点信息
 
-
+    const currentUrl = window.location.href;
     const originalXHROpen = XMLHttpRequest.prototype.open;
     const originalXHRSend = XMLHttpRequest.prototype.send;
 
     const scroller = createBruteForceScroller();
 
     // API配置
-    const API_URL = "https://test-ai.palmplaystore.com/ai/open/HtmlAgent";
+    const API_URL = "https://test-ai.palmplaystore.com/ai/open/HtmlAgentV2";
 
     // 初始化：解除复制限制
     initializeCopyUnlock();
@@ -482,8 +482,9 @@
             获取全文
         `;
         mdButton.className = "feishu-md-button primary";
+        mdButton.style.visibility = "hidden"; 
         // 暂时不开放
-        // document.body.appendChild(mdButton);
+        document.body.appendChild(mdButton);
 
         mdButton.addEventListener("click", handleMdButtonClick);
 
@@ -548,8 +549,8 @@
                 mdButton.className = "feishu-md-button processing";
                 mdButton.disabled = true;
                 // 延迟一下再执行转换，确保页面渲染完成
-                setTimeout(() => {
-                    convertCollectedToMarkdown();
+                setTimeout(async () => {
+                    await convertCollectedToMarkdown();
 
                     // 恢复按钮状态
                     mdButton.innerHTML = `
@@ -739,7 +740,6 @@
     function getElementHash(element) {
         // 直接使用元素的outerHTML生成hash
         const htmlContent = element.innerHTML + element.src + element.textContent + element.getAttribute('data-line-num');
-
         // 生成hash值
         return encodeURIComponent(htmlContent);
     }
@@ -747,7 +747,7 @@
     function collectPageContent() {
         try {
             // 选择需要处理的节点
-            const nodesToProcess = document.querySelectorAll('.heading-h2, .heading-h3,.heading-h4, .docx-text-block, .docx-image, table, .list-content, .inline-code, .code-line-wrapper');
+            const nodesToProcess = document.querySelectorAll('.heading-h2, .heading-h3,.heading-h4,.heading-h5, .docx-text-block, .docx-image, table, .list-content, .inline-code, .code-line-wrapper,canvas');
             // 遍历节点，收集内容
             nodesToProcess.forEach((node) => {
                 // 获取元素的唯一标识
@@ -770,6 +770,10 @@
                         break;
                     case node.classList.contains('heading-h4'):
                         type = 'heading-h4';
+                        content = node.textContent.trim().replace(/\u200B/g, '');
+                        break;
+                    case node.classList.contains('heading-h5'):
+                        type = 'heading-h5';
                         content = node.textContent.trim().replace(/\u200B/g, '');
                         break;
                     case node.classList.contains('docx-text-block'):
@@ -821,6 +825,10 @@
                         type = 'code-block';
                         content = node.textContent;
                         break;
+                    case node.tagName.toLowerCase() === 'canvas' && node.id.startsWith('__ratio_sdk_canvas') && !node.id.startsWith('__ratio_sdk_canvas_0__'):
+                        type = 'canvas';
+                        content = node.toDataURL('image/png');
+                        break;
                     default:
                         break;
                 }
@@ -834,7 +842,18 @@
                         element: node, // 保存原始元素引用，用于排序
                         documentOrder: getDocumentOrder(node) // 获取在文档中的顺序
                     };
-                    collectedNodes.set(elementHash, nodeObj);
+                    if (collectedNodes.get(node) != null && collectedNodes.get(node).elementHash.length >= nodeObj.elementHash.length) {
+                        return
+                    } else {
+                        if (type === 'canvas' && node.id != '') {
+                            collectedNodes.set(node.id, nodeObj);
+                        } else {
+                            collectedNodes.set(node, nodeObj);
+                        }
+
+
+                    }
+
                 }
             });
             // 更新按钮文本显示收集的数量
@@ -888,8 +907,8 @@
             collectionInterval2 = null;
         }
     }
-    // 转换收集到的内容为Markdown
-    function convertCollectedToMarkdown() {
+    // 转换收集到的内容为Markdown - 修改为异步函数以处理图片转换
+    async function convertCollectedToMarkdown() {
         try {
             // 将Map转换为数组并按照在页面中的位置排序
             const nodesArray = Array.from(collectedNodes.values());
@@ -897,7 +916,10 @@
             // 将节点信息转换为 Markdown 格式的文本
             let markdownContent = '';
 
-            nodesArray.forEach((node) => {
+            // 用于存储需要异步处理的图片
+            const imagePromises = [];
+
+            for (const node of nodesArray) {
                 switch (node.type) {
                     case 'heading-h2':
                         markdownContent += '## ' + node.content + '\n\n';
@@ -908,6 +930,9 @@
                     case 'heading-h4':
                         markdownContent += '#### ' + node.content + '\n\n';
                         break;
+                    case 'heading-h5':
+                        markdownContent += '#### ' + node.content + '\n\n';
+                        break;
                     case 'text-block':
                         markdownContent += node.content + '\n\n';
                         break;
@@ -915,7 +940,37 @@
                         markdownContent += node.content + '\n';
                         break;
                     case 'img':
-                        markdownContent += '![](' + node.content + ')' + '\n<br />\n\n';
+                        // 检查是否是 blob URL
+                        if (node.content.startsWith('blob:')) {
+                            try {
+                                // 创建一个 Promise 来处理 blob 转 base64
+                                const imagePromise = fetch(node.content)
+                                    .then(response => response.blob())
+                                    .then(blob => {
+                                        return new Promise((resolve) => {
+                                            const reader = new FileReader();
+                                            reader.onload = function (e) {
+                                                resolve(e.target.result);
+                                            };
+                                            reader.onerror = function () {
+                                                resolve(node.content); // 失败时使用原 URL
+                                            };
+                                            reader.readAsDataURL(blob);
+                                        });
+                                    })
+                                    .catch(() => node.content); // 失败时使用原 URL
+
+                                imagePromises.push(imagePromise);
+                                // 临时使用占位符
+                                markdownContent += `![IMAGE_PLACEHOLDER_${imagePromises.length - 1}]()` + '\n';
+                            } catch (error) {
+                                console.warn('Error processing blob URL:', error);
+                                markdownContent += '![](' + node.content + ')' + '\n';
+                            }
+                        } else {
+                            // 普通 URL 或已经是 base64 格式
+                            markdownContent += '![](' + node.content + ')' + '\n';
+                        }
                         break;
                     case 'list':
                         markdownContent += '- ' + node.content + '\n\n';
@@ -948,27 +1003,62 @@
                             markdownContent += '\n';
                         }
                         break;
+                    case 'canvas':
+                        markdownContent += `![画板${node.element.id}](` + node.content + ')' + '\n\n';
+                        break;
                     default:
                         break;
                 }
-            });
-            // currentContent = markdownContent;
-            // createMdNotification("获取成功", `已收集${collectedNodes.size}个内容块`, "success");
-            // // 复制到剪贴板
-            navigator.clipboard.writeText(markdownContent).then(() => {
-                console.log("Markdown content copied to clipboard.");
-                console.log("收集到的节点数量:", collectedNodes.size);
-                createMdNotification("复制成功", `已收集${collectedNodes.size}个内容块`, "success");
-            }, () => {
-                console.error("Failed to copy Markdown content to clipboard.");
-                console.log("Markdown内容:", markdownContent);
-                createMdNotification("复制失败", "请手动复制控制台内容", "error");
-            });
+            }
+
+            // 等待所有图片转换完成
+            if (imagePromises.length > 0) {
+                const convertedImages = await Promise.all(imagePromises);
+
+                // 替换占位符为实际的 base64 数据
+                convertedImages.forEach((base64Data, index) => {
+                    const placeholder = `![IMAGE_PLACEHOLDER_${index}]()`;
+                    const imageMarkdown = `![](${base64Data})`;
+                    markdownContent = markdownContent.replace(placeholder, imageMarkdown);
+                });
+            }
+            //调用https://test-ai.palmplaystore.com/ai/open/UpdateContent 上传markdownContent
+            try {
+                const uploadResponse = await fetch('https://test-ai.palmplaystore.com/ai/open/UpdateContent', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        currentUrl: currentUrl,
+                        currentContent: markdownContent
+                    })
+                });
+                if (uploadResponse.ok) {
+                    createMdNotification("获取成功", "内容已上传到服务器", "success");
+                } else {
+                    throw new Error(`上传失败: ${uploadResponse.status}`);
+                }
+            } catch (uploadError) {
+                console.error("上传失败:", uploadError);
+                createMdNotification("获取失败", "内容上传到服务器失败", "error");
+            }
+            // 复制到剪贴板
+            // navigator.clipboard.writeText(markdownContent).then(() => {
+            //     console.log("Markdown content copied to clipboard.");
+            //     console.log("收集到的节点数量:", collectedNodes.size);
+            //     createMdNotification("复制成功", `已收集${collectedNodes.size}个内容块`, "success");
+            // }, () => {
+            //     console.error("Failed to copy Markdown content to clipboard.");
+            //     console.log("Markdown内容:", markdownContent);
+            //     createMdNotification("复制失败", "请手动复制控制台内容", "error");
+            // });
         } catch (error) {
             console.error("转换过程中出现错误:", error);
             createMdNotification("转换错误", "转换失败，请重试", "error");
         }
     }
+
 
     // 创建常驻的浮动AI按钮
     function createFloatingAiButton() {
@@ -1498,89 +1588,123 @@
             backdrop-filter: blur(10px);
         `;
 
-        // 添加CSS动画和样式
+        // 修改样式配置，控制所有弹窗大小
         if (!document.getElementById('ai-assistant-style')) {
             const style = document.createElement('style');
             style.id = 'ai-assistant-style';
             style.textContent = `
-                @keyframes aiButtonSlideIn {
-                    0% {
-                        opacity: 0;
-                        transform: scale(0.3) rotate(-180deg);
-                    }
-                    50% {
-                        transform: scale(1.1) rotate(0deg);
-                    }
-                    100% {
-                        opacity: 1;
-                        transform: scale(1) rotate(0deg);
-                    }
-                }
-
-                @keyframes aiButtonPulse {
-                    0%, 100% { transform: scale(1); }
-                    50% { transform: scale(1.05); }
-                }
-
-                @keyframes inputBoxSlideIn {
-                    0% {
-                        opacity: 0;
-                        transform: translateY(-20px) scale(0.95);
-                        backdrop-filter: blur(0px);
-                    }
-                    100% {
-                        opacity: 1;
-                        transform: translateY(0) scale(1);
-                        backdrop-filter: blur(20px);
-                    }
-                }
-
-                @keyframes glowPulse {
-                    0%, 100% { box-shadow: 0 0 10px rgba(102, 126, 234, 0.3); }
-                    50% { box-shadow: 0 0 20px rgba(102, 126, 234, 0.6), 0 0 25px rgba(118, 75, 162, 0.4); }
-                }
-
-                @keyframes spin {
-                    0% { transform: rotate(0deg); }
-                    100% { transform: rotate(360deg); }
-                }
-
-                @keyframes slideInRight {
-                    0% {
-                        opacity: 0;
-                        transform: translateX(20px);
-                    }
-                    100% {
-                        opacity: 1;
-                        transform: translateX(0);
-                    }
-                }
-
-                @keyframes shrinkToCorner {
-                    0% {
-                        transform: scale(1) translate(0, 0);
-                        opacity: 1;
-                    }
-                    100% {
-                        transform: scale(0.5) translate(50%, -50%);
-                        opacity: 0.95;
-                    }
-                }
-
-                @keyframes processingWindowSlideIn {
-                    0% {
-                        transform: translateY(-100%);
-                        opacity: 0;
-                    }
-                    100% {
-                        transform: translateY(0);
-                        opacity: 1;
-                    }
-                }
-            `;
+        @keyframes aiButtonSlideIn {
+            0% {
+                opacity: 0;
+                transform: scale(0.3) rotate(-180deg);
+            }
+            50% {
+                transform: scale(1.1) rotate(0deg);
+            }
+            100% {
+                opacity: 1;
+                transform: scale(1) rotate(0deg);
+            }
+        }
+        @keyframes aiButtonPulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        @keyframes inputBoxSlideIn {
+            0% {
+                opacity: 0;
+                transform: translateY(-20px) scale(0.95);
+                backdrop-filter: blur(0px);
+            }
+            100% {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+                backdrop-filter: blur(20px);
+            }
+        }
+        @keyframes glowPulse {
+            0%, 100% { box-shadow: 0 0 10px rgba(102, 126, 234, 0.3); }
+            50% { box-shadow: 0 0 20px rgba(102, 126, 234, 0.6), 0 0 25px rgba(118, 75, 162, 0.4); }
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        @keyframes slideInRight {
+            0% {
+                opacity: 0;
+                transform: translateX(20px);
+            }
+            100% {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+        @keyframes shrinkToCorner {
+            0% {
+                transform: scale(1) translate(0, 0);
+                opacity: 1;
+            }
+            100% {
+                transform: scale(0.5) translate(50%, -50%);
+                opacity: 0.95;
+            }
+        }
+        @keyframes processingWindowSlideIn {
+            0% {
+                transform: translateY(-100%);
+                opacity: 0;
+            }
+            100% {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+        /* 生成类型选择器样式 */
+        .generation-type-selector {
+            margin-bottom: 12px;
+            padding: 8px;
+            background: rgba(255,255,255,0.03);
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .generation-type-label {
+            font-size: 11px;
+            color: rgba(0,0,0,0.6);
+            margin-bottom: 6px;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .generation-type-options {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .generation-type-option {
+            padding: 4px 8px;
+            font-size: 11px;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            color: rgba(0,0,0,0.7);
+            user-select: none;
+        }
+        .generation-type-option:hover {
+            background: rgba(102, 126, 234, 0.2);
+            border-color: rgba(102, 126, 234, 0.4);
+            color: rgba(0,0,0,0.8);
+        }
+        .generation-type-option.selected {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            border-color: rgba(102, 126, 234, 0.8);
+            color: white;
+        }
+    `;
             document.head.appendChild(style);
         }
-
         // 创建AI图标
         const aiIcon = document.createElement('div');
         aiIcon.innerHTML = `
@@ -1669,57 +1793,61 @@
 
     // 显示科技感输入框 - 修改以支持常驻按钮和外侧图片显示
     function showInputBox(rect, isFloatingButton = false) {
+        // 确保样式已加载
+        ensureStylesLoaded();
+
         // 确保只有一个弹窗
         hideAiButton(); // 隐藏AI按钮
         hideInputBox(); // 隐藏之前可能存在的输入框
-
         inputBoxVisible = true;
         aiDismissed = false; // 重置关闭状态
 
-        // 创建输入框容器
+        // 创建输入框容器 - 修改尺寸
         inputBox = document.createElement('div');
         inputBox.style.cssText = `
-            position: fixed;
-            left: ${rect.left}px;
-            top: ${rect.bottom + 20}px;
-            background: linear-gradient(145deg, rgba(255,255,255,0.1), rgba(255,255,255,0.05));
-            backdrop-filter: blur(20px);
-            border: 1px solid rgba(255,255,255,0.2);
-            border-radius: 16px;
-            padding: 20px;
-            z-index: 10001;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.1), 0 0 0 1px rgba(255,255,255,0.1);
-            width: 400px;  /* 固定宽度，替换 min-width 和 max-width */
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            animation: inputBoxSlideIn 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-        `;
+        position: fixed;
+        left: ${rect.left}px;
+        top: ${rect.bottom + 20}px;
+        background: linear-gradient(145deg, rgba(255,255,255,0.1), rgba(255,255,255,0.05));
+        backdrop-filter: blur(20px);
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 16px;
+        padding: 16px;
+        z-index: 10001;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.1), 0 0 0 1px rgba(255,255,255,0.1);
+        width: 350px;
+        max-height: 400px;
+        overflow: visible;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        animation: inputBoxSlideIn 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+        transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+    `;
 
-        // 创建标题栏
+        // 创建标题栏 - 减小尺寸
         const titleBar = document.createElement('div');
         titleBar.style.cssText = `
         display: flex;
         align-items: center;
-        margin-bottom: 16px;
-        padding-bottom: 12px;
+        margin-bottom: 12px;
+        padding-bottom: 8px;
         border-bottom: 1px solid rgba(255,255,255,0.1);
     `;
 
         // AI图标（标题栏中的小图标）
         const titleIcon = document.createElement('div');
         titleIcon.innerHTML = `
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
             <path d="M12 2L13.09 8.26L20 9L13.09 9.74L12 16L10.91 9.74L4 9L10.91 8.26L12 2Z" fill="#667eea"/>
             <path d="M19 11L19.5 13.5L22 14L19.5 14.5L19 17L18.5 14.5L16 14L18.5 13.5L19 11Z" fill="#764ba2"/>
         </svg>
     `;
-        titleIcon.style.marginRight = '8px';
+        titleIcon.style.marginRight = '6px';
 
-        // 标题文字
+        // 标题文字 - 减小字体
         const titleText = document.createElement('span');
         titleText.textContent = 'AI 智能助手';
         titleText.style.cssText = `
-        font-size: 16px;
+        font-size: 14px;
         font-weight: 600;
         background: linear-gradient(135deg, #667eea, #764ba2);
         -webkit-background-clip: text;
@@ -1729,86 +1857,95 @@
 
         titleBar.appendChild(titleIcon);
         titleBar.appendChild(titleText);
+        inputBox.appendChild(titleBar);
 
-        // 如果不是常驻按钮调用且有选中文本，则显示选中的文本
-        if (!isFloatingButton && selectedText) {
-            const selectedTextDiv = document.createElement('div');
-            selectedTextDiv.style.cssText = `
-            background: rgba(255,255,255,0.05);
-            border: 1px solid rgba(255,255,255,0.1);
-            border-radius: 12px;
-            padding: 12px;
-            margin-bottom: 16px;
-            max-height: 80px;
-            overflow-y: auto;
-            font-size: 13px;
-            color: rgba(0,0,0,0.8);
-            line-height: 1.4;
-        `;
+        // 新增：生成类型选择器
+        const generationTypeSelector = document.createElement('div');
+        generationTypeSelector.className = 'generation-type-selector';
 
-            const textLabel = document.createElement('div');
-            textLabel.style.cssText = `
-            font-size: 11px;
-            color: rgba(0,0,0,0.6);
-            margin-bottom: 6px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            font-weight: 500;
-        `;
-            textLabel.textContent = '已选择内容';
+        const typeLabel = document.createElement('div');
+        typeLabel.className = 'generation-type-label';
+        typeLabel.textContent = '生成类型';
 
-            const textContent = document.createElement('div');
-            textContent.textContent = selectedText.substring(0, 200) + (selectedText.length > 200 ? '...' : '');
+        const typeOptions = document.createElement('div');
+        typeOptions.className = 'generation-type-options';
 
-            selectedTextDiv.appendChild(textLabel);
-            selectedTextDiv.appendChild(textContent);
-            inputBox.appendChild(titleBar);
-            inputBox.appendChild(selectedTextDiv);
-        } else {
-            inputBox.appendChild(titleBar);
-        }
+        const types = [
+            { value: 'auto', label: '自动' },
+            { value: 'mermaid', label: 'Mermaid' },
+            { value: 'drawio', label: 'DrawIO' },
+            { value: 'svg', label: 'SVG' },
+            { value: 'mindmap', label: '思维导图' }
+        ];
 
-        // 创建图片显示区域（在输入框外侧）
+        types.forEach((type, index) => {
+            const option = document.createElement('div');
+            option.className = 'generation-type-option';
+            option.textContent = type.label;
+            option.dataset.value = type.value;
+
+            // 默认选中第一个
+            if (index === 0) {
+                option.classList.add('selected');
+            }
+
+            option.addEventListener('click', function () {
+                // 清除其他选中状态
+                typeOptions.querySelectorAll('.generation-type-option').forEach(opt => {
+                    opt.classList.remove('selected');
+                });
+                // 选中当前选项
+                this.classList.add('selected');
+            });
+
+            typeOptions.appendChild(option);
+        });
+
+        generationTypeSelector.appendChild(typeLabel);
+        generationTypeSelector.appendChild(typeOptions);
+        inputBox.appendChild(generationTypeSelector);
+
+        // 创建图片显示区域（在输入框外侧）- 减小尺寸
         const imageDisplayArea = document.createElement('div');
         imageDisplayArea.id = 'image-display-area';
         imageDisplayArea.style.cssText = `
-        margin-bottom: 16px;
+        margin-bottom: 12px;
         min-height: 0;
         transition: all 0.3s ease;
         display: flex;
         flex-wrap: wrap;
-        gap: 8px;
+        gap: 6px;
         padding: 0;
-        border-radius: 12px;
+        border-radius: 8px;
     `;
 
         // 创建输入框容器
         const inputContainer = document.createElement('div');
         inputContainer.style.cssText = `
         position: relative;
-        margin-bottom: 16px;
+        margin-bottom: 12px;
     `;
 
-        // 创建输入框 - 纯文本输入
+        // 创建输入框 - 纯文本输入，固定高度不延伸
         const input = document.createElement('div');
         input.setAttribute('contenteditable', 'true');
         input.id = 'ai-text-input';
         input.style.cssText = `
         width: 100%;
-        min-height: 100px;
-        max-height: 200px;
+        height: 80px;
         background: rgba(255,255,255,0.05);
         border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 12px;
-        padding: 12px;
-        font-size: 14px;
+        border-radius: 8px;
+        padding: 10px;
+        font-size: 13px;
         color: rgba(0,0,0,0.9);
         font-family: inherit;
         box-sizing: border-box;
         transition: all 0.3s ease;
         outline: none;
         overflow-y: auto;
-        line-height: 1.4;
+        line-height: 1.3;
+        resize: none;
     `;
 
         // 设置占位符
@@ -1820,7 +1957,7 @@
                 this.innerHTML = '';
             }
             this.style.borderColor = 'rgba(102, 126, 234, 0.5)';
-            this.style.boxShadow = '0 0 0 3px rgba(102, 126, 234, 0.1)';
+            this.style.boxShadow = '0 0 0 2px rgba(102, 126, 234, 0.1)';
             this.style.background = 'rgba(255,255,255,0.1)';
         });
 
@@ -1833,21 +1970,18 @@
             this.style.background = 'rgba(255,255,255,0.05)';
         });
 
-        // 添加图片粘贴功能
+        // 添加图片粘贴功能（保持原有功能）
         input.addEventListener('paste', function (e) {
             e.preventDefault();
-
             const items = e.clipboardData.items;
             let hasImage = false;
 
             // 检查剪贴板中的图片
             for (let i = 0; i < items.length; i++) {
                 const item = items[i];
-
                 if (item.type.indexOf('image') !== -1) {
                     hasImage = true;
                     const file = item.getAsFile();
-
                     if (file) {
                         // 处理图片文件，传入图片显示区域
                         handleImagePaste(file, imageDisplayArea);
@@ -1863,7 +1997,6 @@
                     if (input.innerHTML.includes('请输入您的需求')) {
                         input.innerHTML = '';
                     }
-
                     // 插入文本
                     const selection = window.getSelection();
                     const range = selection.getRangeAt(0);
@@ -1878,25 +2011,25 @@
 
         inputContainer.appendChild(input);
 
-        // 创建按钮容器
+        // 创建按钮容器 - 减小按钮尺寸
         const buttonContainer = document.createElement('div');
         buttonContainer.style.cssText = `
         display: flex;
-        gap: 10px;
+        gap: 8px;
         justify-content: flex-end;
     `;
 
-        // 创建按钮样式函数
+        // 创建按钮样式函数 - 减小按钮
         function createButton(text, gradient, hoverGradient) {
             const btn = document.createElement('button');
             btn.style.cssText = `
             background: ${gradient};
             color: white;
             border: none;
-            padding: 10px 20px;
-            border-radius: 10px;
+            padding: 8px 16px;
+            border-radius: 8px;
             cursor: pointer;
-            font-size: 14px;
+            font-size: 12px;
             font-weight: 500;
             transition: all 0.3s ease;
             backdrop-filter: blur(10px);
@@ -1908,8 +2041,8 @@
 
             btn.addEventListener('mouseenter', function () {
                 this.style.background = hoverGradient;
-                this.style.transform = 'translateY(-2px)';
-                this.style.boxShadow = '0 8px 25px rgba(0,0,0,0.15)';
+                this.style.transform = 'translateY(-1px)';
+                this.style.boxShadow = '0 4px 15px rgba(0,0,0,0.15)';
             });
 
             btn.addEventListener('mouseleave', function () {
@@ -1919,21 +2052,6 @@
             });
 
             return btn;
-        }
-
-        // 如果有选中内容，显示复制按钮
-        if (!isFloatingButton && selectedText) {
-            const copyBtn = createButton(
-                '复制内容',
-                'linear-gradient(135deg, #3b82f6, #1d4ed8)',
-                'linear-gradient(135deg, #2563eb, #1e40af)'
-            );
-            copyBtn.onclick = function () {
-                const cleanedText = cleanText(selectedText);
-                copyToClipboard(cleanedText);
-                showNotification('内容已复制到剪贴板');
-            };
-            buttonContainer.appendChild(copyBtn);
         }
 
         // 取消按钮
@@ -1946,7 +2064,7 @@
             hideInputBox();
         };
 
-        // 确认按钮
+        // 确认按钮 - 修改为获取选中的生成类型
         const confirmBtn = createButton(
             'AI 处理',
             'linear-gradient(135deg, #667eea, #764ba2)',
@@ -1954,9 +2072,13 @@
         );
         confirmBtn.onclick = function () {
             const content = getInputContent(input);
+            // 获取选中的生成类型
+            const selectedType = typeOptions.querySelector('.generation-type-option.selected');
+            const generationType = selectedType ? selectedType.dataset.value : 'auto';
+
             if (content.text.trim() || content.images.length > 0) {
                 const textToProcess = isFloatingButton ? '' : selectedText;
-                showProcessingWindow(textToProcess, content.text, content.images);
+                showProcessingWindow(textToProcess, content.text, content.images, generationType);
                 hideInputBox(true);
             } else {
                 input.style.borderColor = '#ef4444';
@@ -1971,7 +2093,7 @@
         buttonContainer.appendChild(cancelBtn);
         buttonContainer.appendChild(confirmBtn);
 
-        inputBox.appendChild(imageDisplayArea); // 图片区域在输入框前
+        inputBox.appendChild(imageDisplayArea);
         inputBox.appendChild(inputContainer);
         inputBox.appendChild(buttonContainer);
 
@@ -1998,6 +2120,391 @@
         inputBox.addEventListener('click', function (e) {
             e.stopPropagation();
         });
+    }
+    // 确保样式已加载的函数
+    function ensureStylesLoaded() {
+        if (!document.getElementById('ai-assistant-style')) {
+            const style = document.createElement('style');
+            style.id = 'ai-assistant-style';
+            style.textContent = `
+            @keyframes aiButtonSlideIn {
+                0% {
+                    opacity: 0;
+                    transform: scale(0.3) rotate(-180deg);
+                }
+                50% {
+                    transform: scale(1.1) rotate(0deg);
+                }
+                100% {
+                    opacity: 1;
+                    transform: scale(1) rotate(0deg);
+                }
+            }
+            @keyframes aiButtonPulse {
+                0%, 100% { transform: scale(1); }
+                50% { transform: scale(1.05); }
+            }
+            @keyframes inputBoxSlideIn {
+                0% {
+                    opacity: 0;
+                    transform: translateY(-20px) scale(0.95);
+                    backdrop-filter: blur(0px);
+                }
+                100% {
+                    opacity: 1;
+                    transform: translateY(0) scale(1);
+                    backdrop-filter: blur(20px);
+                }
+            }
+            @keyframes glowPulse {
+                0%, 100% { box-shadow: 0 0 10px rgba(102, 126, 234, 0.3); }
+                50% { box-shadow: 0 0 20px rgba(102, 126, 234, 0.6), 0 0 25px rgba(118, 75, 162, 0.4); }
+            }
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+            @keyframes slideInRight {
+                0% {
+                    opacity: 0;
+                    transform: translateX(20px);
+                }
+                100% {
+                    opacity: 1;
+                    transform: translateX(0);
+                }
+            }
+            @keyframes shrinkToCorner {
+                0% {
+                    transform: scale(1) translate(0, 0);
+                    opacity: 1;
+                }
+                100% {
+                    transform: scale(0.5) translate(50%, -50%);
+                    opacity: 0.95;
+                }
+            }
+            @keyframes processingWindowSlideIn {
+                0% {
+                    transform: translateY(-100%);
+                    opacity: 0;
+                }
+                100% {
+                    transform: translateY(0);
+                    opacity: 1;
+                }
+            }
+            /* 生成类型选择器样式 */
+            .generation-type-selector {
+                margin-bottom: 12px;
+                padding: 8px;
+                background: rgba(255,255,255,0.03);
+                border-radius: 8px;
+                border: 1px solid rgba(255,255,255,0.1);
+            }
+            .generation-type-label {
+                font-size: 11px;
+                color: rgba(0,0,0,0.6);
+                margin-bottom: 6px;
+                font-weight: 500;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }
+            .generation-type-options {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 6px;
+            }
+            .generation-type-option {
+                padding: 4px 8px;
+                font-size: 11px;
+                background: rgba(255,255,255,0.1);
+                border: 1px solid rgba(255,255,255,0.2);
+                border-radius: 12px;
+                cursor: pointer;
+                transition: all 0.2s ease;
+                color: rgba(0,0,0,0.7);
+                user-select: none;
+            }
+            .generation-type-option:hover {
+                background: rgba(102, 126, 234, 0.2);
+                border-color: rgba(102, 126, 234, 0.4);
+                color: rgba(0,0,0,0.8);
+            }
+            .generation-type-option.selected {
+                background: linear-gradient(135deg, #667eea, #764ba2);
+                border-color: rgba(102, 126, 234, 0.8);
+                color: white;
+            }
+        `;
+            document.head.appendChild(style);
+        }
+    }
+
+    // 修改 showProcessingWindow 函数参数
+    function showProcessingWindow(text, prompt, images = [], generationType = 'auto') {
+        // 创建处理窗口 - 减小尺寸
+        processingWindow = document.createElement('div');
+        processingWindow.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: linear-gradient(145deg, rgba(255,255,255,0.1), rgba(255,255,255,0.05));
+        backdrop-filter: blur(20px);
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 12px;
+        padding: 12px;
+        z-index: 10003;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.1), 0 0 0 1px rgba(255,255,255,0.1);
+        width: 260px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        animation: processingWindowSlideIn 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+        transition: all 0.3s ease;
+    `;
+        // 标题 - 减小字体
+        const title = document.createElement('div');
+        title.style.cssText = `
+        display: flex;
+        align-items: center;
+        margin-bottom: 10px;
+        font-size: 13px;
+        font-weight: 600;
+        color: rgba(0,0,0,0.8);
+    `;
+        // AI图标 - 减小尺寸
+        const icon = document.createElement('div');
+        icon.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2L13.09 8.26L20 9L13.09 9.74L12 16L10.91 9.74L4 9L10.91 8.26L12 2Z" fill="#667eea"/>
+            <path d="M19 11L19.5 13.5L22 14L19.5 14.5L19 17L18.5 14.5L16 14L18.5 13.5L19 11Z" fill="#764ba2"/>
+        </svg>
+    `;
+        icon.style.marginRight = '6px';
+        const titleText = document.createTextNode('AI 处理中...');
+        title.appendChild(icon);
+        title.appendChild(titleText);
+        // 内容区域
+        const content = document.createElement('div');
+        content.style.cssText = `
+        margin-bottom: 10px;
+        font-size: 11px;
+        color: rgba(0,0,0,0.6);
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    `;
+        // 显示生成类型
+        const typeInfo = document.createElement('div');
+        typeInfo.style.cssText = `
+        background: rgba(255,255,255,0.1);
+        border-radius: 6px;
+        padding: 6px;
+        font-size: 10px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    `;
+
+        // 只有当有选中内容时才显示 - 减小尺寸
+        if (text && text.trim()) {
+            const selectedTextSummary = document.createElement('div');
+            selectedTextSummary.style.cssText = `
+            background: rgba(255,255,255,0.1);
+            border-radius: 6px;
+            padding: 6px;
+            font-size: 10px;
+            max-height: 30px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        `;
+            selectedTextSummary.textContent = `选中内容: ${text.substring(0, 40)}${text.length > 40 ? '...' : ''}`;
+            content.appendChild(selectedTextSummary);
+        }
+        // 显示用户需求摘要 - 减小尺寸
+        if (prompt && prompt.trim()) {
+            const promptSummary = document.createElement('div');
+            promptSummary.style.cssText = `
+            background: rgba(255,255,255,0.1);
+            border-radius: 6px;
+            padding: 6px;
+            font-size: 10px;
+            max-height: 30px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        `;
+            promptSummary.textContent = `需求: ${prompt.substring(0, 40)}${prompt.length > 40 ? '...' : ''}`;
+            content.appendChild(promptSummary);
+        }
+        // 显示图片信息 - 减小尺寸
+        if (images && images.length > 0) {
+            const imageInfo = document.createElement('div');
+            imageInfo.style.cssText = `
+            background: rgba(255,255,255,0.1);
+            border-radius: 4px;
+            padding: 4px;
+            font-size: 10px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        `;
+            const imageIcon = document.createElement('div');
+            imageIcon.innerHTML = `
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" stroke="currentColor" stroke-width="2"/>
+                <circle cx="8.5" cy="8.5" r="1.5" stroke="currentColor" stroke-width="2"/>
+                <polyline points="21,15 16,10 5,21" stroke="currentColor" stroke-width="2"/>
+            </svg>
+        `;
+            const imageText = document.createElement('span');
+            imageText.textContent = `包含 ${images.length} 张图片`;
+            imageInfo.appendChild(imageIcon);
+            imageInfo.appendChild(imageText);
+            content.appendChild(imageInfo);
+        }
+        // 进度指示器 - 减小尺寸
+        const progressContainer = document.createElement('div');
+        progressContainer.style.cssText = `
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 4px;
+    `;
+
+        const spinner = document.createElement('div');
+        spinner.style.cssText = `
+        width: 14px;
+        height: 14px;
+        border: 2px solid rgba(102, 126, 234, 0.3);
+        border-top: 2px solid rgba(102, 126, 234, 1);
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        flex-shrink: 0;
+    `;
+
+        const progressText = document.createElement('div');
+        progressText.style.cssText = `
+        font-size: 11px;
+        color: rgba(0,0,0,0.7);
+        flex: 1;
+    `;
+        progressText.textContent = '正在处理您的请求...';
+
+        // 组装进度条
+        progressContainer.appendChild(spinner);
+        progressContainer.appendChild(progressText);
+        // 取消按钮 - 减小尺寸
+        const cancelBtn = document.createElement('button');
+        cancelBtn.style.cssText = `
+        background: linear-gradient(135deg, #6b7280, #4b5563);
+        color: white;
+        border: none;
+        padding: 5px 10px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 11px;
+        margin-top: 8px;
+        align-self: flex-end;
+        transition: all 0.3s ease;
+    `;
+        cancelBtn.textContent = '取消';
+        cancelBtn.addEventListener('mouseenter', function () {
+            this.style.background = 'linear-gradient(135deg, #4b5563, #374151)';
+            this.style.transform = 'translateY(-1px)';
+        });
+        cancelBtn.addEventListener('mouseleave', function () {
+            this.style.background = 'linear-gradient(135deg, #6b7280, #4b5563)';
+            this.style.transform = 'translateY(0)';
+        });
+        cancelBtn.addEventListener('click', function () {
+            hideProcessingWindow();
+        });
+        // 组装内容
+        content.appendChild(progressContainer);
+        processingWindow.appendChild(title);
+        processingWindow.appendChild(content);
+        processingWindow.appendChild(cancelBtn);
+        document.body.appendChild(processingWindow);
+        // 实际调用API处理，传递生成类型
+        handlePromptSubmit(text, prompt, images);
+    }
+    async function handlePromptSubmit(text, prompt, images = []) {
+        console.log('Selected text:', text);
+        console.log('User prompt:', prompt);
+        console.log('Images:', images.length);
+        try {
+            // 组合完整的提示词，包含生成类型信息
+            let fullPrompt = '';
+            if (text && prompt) {
+                fullPrompt = `当前用户选择的内容是###${text}###，\n\n当前用户的需求是###${prompt}###`;
+            } else if (prompt) {
+                fullPrompt = `--- 用户需求 ---\n当前用户的需求是###${prompt}###`;
+            }
+            // 准备POST数据
+            const formData = new FormData();
+            const selectedType = document.querySelector('.generation-type-option.selected');
+            const generationType = selectedType ? selectedType.dataset.value : 'auto';
+            formData.append('prompt', fullPrompt);
+            formData.append('currentUrl', currentUrl);
+            formData.append('generationType', generationType);
+            // 添加图片数据
+            if (images && images.length > 0) {
+                images.forEach((imageData, index) => {
+                    // 将 base64 转换为 blob
+                    const base64Data = imageData.base64.split(',')[1];
+                    const byteCharacters = atob(base64Data);
+                    const byteNumbers = new Array(byteCharacters.length);
+                    for (let i = 0; i < byteCharacters.length; i++) {
+                        byteNumbers[i] = byteCharacters.charCodeAt(i);
+                    }
+                    const byteArray = new Uint8Array(byteNumbers);
+                    const blob = new Blob([byteArray], { type: imageData.type });
+                    formData.append('images', blob, imageData.name);
+                });
+            }
+
+            // 获取当前用户名
+            const userCacheKey = 'feishu_user_name';
+            const userName = localStorage.getItem(userCacheKey);
+            if (userName) {
+                formData.append('userName', userName);
+            }
+
+            // 发送API请求
+            const response = await fetch(API_URL, {
+                method: 'POST',
+                body: formData // 不设置 Content-Type，让浏览器自动设置包含 boundary
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const result = await response.text();
+            // 隐藏处理窗口
+            hideProcessingWindow();
+            // 处理响应结果
+            if (result && (result.startsWith('http://') || result.startsWith('https://'))) {
+                window.open(result, '_blank');
+            } else {
+                try {
+                    const jsonResult = JSON.parse(result);
+                    if (jsonResult.messageType == 'URL') {
+                        window.open(jsonResult.message, '_blank');
+                    } else {
+                        // copyToClipboard(result);
+                        showNotification(jsonResult.message);
+                    }
+                } catch (e) {
+                    copyToClipboard(result);
+                    showNotification('AI 响应已复制到剪贴板！');
+                }
+            }
+        } catch (error) {
+            console.error('API call failed:', error);
+            showNotification('调用 AI 接口失败，请重试');
+            hideProcessingWindow();
+        }
     }
 
     // 处理图片粘贴 - 修改为显示更小的图片
@@ -2156,277 +2663,6 @@
     }
 
 
-
-    // 显示处理窗口 - 修改以支持图片
-    function showProcessingWindow(text, prompt, images = []) {
-        // 确保CSS动画样式已加载
-        if (!document.getElementById('ai-assistant-style')) {
-            const style = document.createElement('style');
-            style.id = 'ai-assistant-style';
-            style.textContent = `
-            @keyframes spin {
-                0% { transform: rotate(0deg); }
-                100% { transform: rotate(360deg); }
-            }
-
-            @keyframes aiButtonSlideIn {
-                0% {
-                    opacity: 0;
-                    transform: scale(0.3) rotate(-180deg);
-                }
-                50% {
-                    transform: scale(1.1) rotate(0deg);
-                }
-                100% {
-                    opacity: 1;
-                    transform: scale(1) rotate(0deg);
-                }
-            }
-            @keyframes aiButtonPulse {
-                0%, 100% { transform: scale(1); }
-                50% { transform: scale(1.05); }
-            }
-            @keyframes inputBoxSlideIn {
-                0% {
-                    opacity: 0;
-                    transform: translateY(-20px) scale(0.95);
-                    backdrop-filter: blur(0px);
-                }
-                100% {
-                    opacity: 1;
-                    transform: translateY(0) scale(1);
-                    backdrop-filter: blur(20px);
-                }
-            }
-            @keyframes glowPulse {
-                0%, 100% { box-shadow: 0 0 10px rgba(102, 126, 234, 0.3); }
-                50% { box-shadow: 0 0 20px rgba(102, 126, 234, 0.6), 0 0 25px rgba(118, 75, 162, 0.4); }
-            }
-            @keyframes slideInRight {
-                0% {
-                    opacity: 0;
-                    transform: translateX(20px);
-                }
-                100% {
-                    opacity: 1;
-                    transform: translateX(0);
-                }
-            }
-            @keyframes shrinkToCorner {
-                0% {
-                    transform: scale(1) translate(0, 0);
-                    opacity: 1;
-                }
-                100% {
-                    transform: scale(0.5) translate(50%, -50%);
-                    opacity: 0.95;
-                }
-            }
-            @keyframes processingWindowSlideIn {
-                0% {
-                    transform: translateY(-100%);
-                    opacity: 0;
-                }
-                100% {
-                    transform: translateY(0);
-                    opacity: 1;
-                }
-            }
-        `;
-            document.head.appendChild(style);
-        }
-        // 创建处理窗口
-        processingWindow = document.createElement('div');
-        processingWindow.style.cssText = `
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        background: linear-gradient(145deg, rgba(255,255,255,0.1), rgba(255,255,255,0.05));
-        backdrop-filter: blur(20px);
-        border: 1px solid rgba(255,255,255,0.2);
-        border-radius: 16px;
-        padding: 15px;
-        z-index: 10003;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.1), 0 0 0 1px rgba(255,255,255,0.1);
-        width: 300px;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        animation: processingWindowSlideIn 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-        transition: all 0.3s ease;
-    `;
-
-        // 标题
-        const title = document.createElement('div');
-        title.style.cssText = `
-        display: flex;
-        align-items: center;
-        margin-bottom: 12px;
-        font-size: 14px;
-        font-weight: 600;
-        color: rgba(0,0,0,0.8);
-    `;
-
-        // AI图标
-        const icon = document.createElement('div');
-        icon.innerHTML = `
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <path d="M12 2L13.09 8.26L20 9L13.09 9.74L12 16L10.91 9.74L4 9L10.91 8.26L12 2Z" fill="#667eea"/>
-            <path d="M19 11L19.5 13.5L22 14L19.5 14.5L19 17L18.5 14.5L16 14L18.5 13.5L19 11Z" fill="#764ba2"/>
-        </svg>
-    `;
-        icon.style.marginRight = '8px';
-
-        const titleText = document.createTextNode('AI 处理中...');
-        title.appendChild(icon);
-        title.appendChild(titleText);
-
-        // 内容区域
-        const content = document.createElement('div');
-        content.style.cssText = `
-        margin-bottom: 12px;
-        font-size: 12px;
-        color: rgba(0,0,0,0.6);
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-    `;
-
-        // 只有当有选中内容时才显示
-        if (text && text.trim()) {
-            const selectedTextSummary = document.createElement('div');
-            selectedTextSummary.style.cssText = `
-            background: rgba(255,255,255,0.1);
-            border-radius: 8px;
-            padding: 8px;
-            font-size: 11px;
-            max-height: 40px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        `;
-            selectedTextSummary.textContent = `选中内容: ${text.substring(0, 50)}${text.length > 50 ? '...' : ''}`;
-            content.appendChild(selectedTextSummary);
-        }
-
-        // 显示用户需求摘要
-        if (prompt && prompt.trim()) {
-            const promptSummary = document.createElement('div');
-            promptSummary.style.cssText = `
-            background: rgba(255,255,255,0.1);
-            border-radius: 8px;
-            padding: 8px;
-            font-size: 11px;
-            max-height: 40px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        `;
-            promptSummary.textContent = `需求: ${prompt.substring(0, 50)}${prompt.length > 50 ? '...' : ''}`;
-            content.appendChild(promptSummary);
-        }
-
-        // 显示图片信息
-        if (images && images.length > 0) {
-            const imageInfo = document.createElement('div');
-            imageInfo.style.cssText = `
-            background: rgba(255,255,255,0.1);
-            border-radius: 4px;
-            padding: 4px;
-            font-size: 11px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        `;
-
-            const imageIcon = document.createElement('div');
-            imageIcon.innerHTML = `
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" stroke="currentColor" stroke-width="2"/>
-                <circle cx="8.5" cy="8.5" r="1.5" stroke="currentColor" stroke-width="2"/>
-                <polyline points="21,15 16,10 5,21" stroke="currentColor" stroke-width="2"/>
-            </svg>
-        `;
-
-            const imageText = document.createElement('span');
-            imageText.textContent = `包含 ${images.length} 张图片`;
-
-            imageInfo.appendChild(imageIcon);
-            imageInfo.appendChild(imageText);
-            content.appendChild(imageInfo);
-        }
-
-        // 进度指示器
-        const progressContainer = document.createElement('div');
-        progressContainer.style.cssText = `
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin-top: 5px;
-    `;
-        const spinner = document.createElement('div');
-        spinner.style.cssText = `
-        width: 16px;
-        height: 16px;
-        border: 2px solid rgba(102, 126, 234, 0.3);
-        border-top: 2px solid rgba(102, 126, 234, 1);
-        border-radius: 50%;
-        animation: spin 1s linear infinite;
-        flex-shrink: 0;
-    `;
-        const progressText = document.createElement('div');
-        progressText.style.cssText = `
-        font-size: 12px;
-        color: rgba(0,0,0,0.7);
-        flex: 1;
-    `;
-        progressText.textContent = '正在处理您的请求...';
-        // 组装进度条
-        progressContainer.appendChild(spinner);
-        progressContainer.appendChild(progressText);
-
-        // 取消按钮
-        const cancelBtn = document.createElement('button');
-        cancelBtn.style.cssText = `
-        background: linear-gradient(135deg, #6b7280, #4b5563);
-        color: white;
-        border: none;
-        padding: 6px 12px;
-        border-radius: 8px;
-        cursor: pointer;
-        font-size: 12px;
-        margin-top: 10px;
-        align-self: flex-end;
-        transition: all 0.3s ease;
-    `;
-        cancelBtn.textContent = '取消';
-
-        cancelBtn.addEventListener('mouseenter', function () {
-            this.style.background = 'linear-gradient(135deg, #4b5563, #374151)';
-            this.style.transform = 'translateY(-2px)';
-        });
-
-        cancelBtn.addEventListener('mouseleave', function () {
-            this.style.background = 'linear-gradient(135deg, #6b7280, #4b5563)';
-            this.style.transform = 'translateY(0)';
-        });
-
-        cancelBtn.addEventListener('click', function () {
-            hideProcessingWindow();
-        });
-
-        // 组装内容
-        content.appendChild(progressContainer);
-
-        processingWindow.appendChild(title);
-        processingWindow.appendChild(content);
-        processingWindow.appendChild(cancelBtn);
-
-        document.body.appendChild(processingWindow);
-
-        // 实际调用API处理
-        handlePromptSubmit(text, prompt, images);
-    }
-
-
     // 隐藏处理窗口
     function hideProcessingWindow() {
         if (processingWindow) {
@@ -2504,86 +2740,6 @@
             selection.removeAllRanges();
         }
         */
-    }
-
-    // 处理提示词提交 - 修改以支持图片
-    async function handlePromptSubmit(text, prompt, images = []) {
-        console.log('Selected text:', text);
-        console.log('User prompt:', prompt);
-        console.log('Images:', images.length);
-
-        try {
-            // 组合完整的提示词
-            let fullPrompt = '';
-            if (text && prompt) {
-                fullPrompt = `当前用户选择的内容是###${text}###，\n\n当前用户的需求是###${prompt}###`;
-            } else if (prompt) {
-                fullPrompt = `--- 用户需求 ---\n当前用户的需求是###${prompt}###`;
-            }
-
-            // 准备POST数据
-            const formData = new FormData();
-            formData.append('prompt', fullPrompt);
-
-            // 添加图片数据
-            if (images && images.length > 0) {
-                images.forEach((imageData, index) => {
-                    // 将 base64 转换为 blob
-                    const base64Data = imageData.base64.split(',')[1];
-                    const byteCharacters = atob(base64Data);
-                    const byteNumbers = new Array(byteCharacters.length);
-                    for (let i = 0; i < byteCharacters.length; i++) {
-                        byteNumbers[i] = byteCharacters.charCodeAt(i);
-                    }
-                    const byteArray = new Uint8Array(byteNumbers);
-                    const blob = new Blob([byteArray], { type: imageData.type });
-
-                    formData.append('images', blob, imageData.name);
-                });
-            }
-            // 获取当前用户名
-            const userCacheKey = 'feishu_user_name';
-            const userName = localStorage.getItem(userCacheKey);
-            if (userName) {
-                formData.append('userName', userName);
-            }
-            // 发送API请求
-            const response = await fetch(API_URL, {
-                method: 'POST',
-                body: formData // 不设置 Content-Type，让浏览器自动设置包含 boundary
-            });
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-
-            const result = await response.text();
-
-            // 隐藏处理窗口
-            hideProcessingWindow();
-
-            // 处理响应结果
-            if (result && (result.startsWith('http://') || result.startsWith('https://'))) {
-                window.open(result, '_blank');
-            } else {
-                try {
-                    const jsonResult = JSON.parse(result);
-                    if (jsonResult.url) {
-                        window.open(jsonResult.url, '_blank');
-                    } else {
-                        copyToClipboard(result);
-                        showNotification('AI 响应已复制到剪贴板！');
-                    }
-                } catch (e) {
-                    copyToClipboard(result);
-                    showNotification('AI 响应已复制到剪贴板！');
-                }
-            }
-
-        } catch (error) {
-            console.error('API call failed:', error);
-            showNotification('调用 AI 接口失败，请重试');
-            hideProcessingWindow();
-        }
     }
 
 
