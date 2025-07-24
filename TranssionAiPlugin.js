@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         传音AI助手
 // @namespace    http://tampermonkey.net/
-// @version      1.0.5
+// @version      1.0.6
 // @description  选中文本后显示AI助手，调用API生成内容并打开新标签页，支持全选和受限网站，集成飞书文档转Markdown功能
 // @author       hongxiang.zhou
 // @match        https://*.feishu.cn/*/*
@@ -1621,19 +1621,10 @@
             left = (viewportWidth - buttonSize) / 2;
         }
 
-        // 垂直位置：优先显示在鼠标下方，空间不足时显示上方
-        if (mouseY + buttonSize + margin <= viewportHeight) {
-            top = mouseY + margin;
-        } else if (mouseY - buttonSize - margin >= 0) {
-            top = mouseY - buttonSize - margin;
-        } else {
-            // 极端情况：显示在屏幕中央
-            top = (viewportHeight - buttonSize) / 2;
-        }
+        top = mouseY
 
         // 确保不超出边界
         left = Math.max(10, Math.min(left, viewportWidth - buttonSize - 10));
-        top = Math.max(10, Math.min(top, viewportHeight - buttonSize - 10));
 
         aiButton.style.cssText = `
         position: fixed;
