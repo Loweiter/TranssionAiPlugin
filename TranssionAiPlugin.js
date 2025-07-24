@@ -63,6 +63,15 @@
     // 创建Markdown转换按钮
     createMarkdownButton();
 
+    // 全局鼠标位置跟踪
+    window.lastMouseX = 0;
+    window.lastMouseY = 0;
+
+    document.addEventListener('mousemove', function (e) {
+        window.lastMouseX = e.clientX;
+        window.lastMouseY = e.clientY;
+    }, { passive: true });
+
 
     XMLHttpRequest.prototype.open = function (method, url, ...args) {
         this._url = url;
@@ -482,7 +491,7 @@
             获取全文
         `;
         mdButton.className = "feishu-md-button primary";
-        mdButton.style.visibility = "hidden"; 
+        mdButton.style.visibility = "hidden";
         // 暂时不开放
         document.body.appendChild(mdButton);
 
@@ -1484,26 +1493,28 @@
                         const newText = newSelection.toString().trim();
                         if (newText && newText.length > 0) {
                             selectedText = newText;
-                            //console.log('延迟检测到选中文本:', selectedText);
+                            console.log('延迟检测到选中文本:', selectedText);
 
-                            // 对于全选或无法获取正确位置的情况，使用事件位置或默认位置
+                            // 对于全选或无法获取正确位置的情况，使用事件位置或鼠标位置
                             let displayRect;
                             if (event && event.clientX && event.clientY) {
                                 displayRect = {
                                     right: event.clientX,
                                     top: event.clientY,
-                                    bottom: event.clientY
+                                    bottom: event.clientY,
+                                    left: event.clientX
                                 };
                             } else {
-                                // 使用视口中心位置
+                                // 使用全局鼠标位置
                                 displayRect = {
-                                    right: window.innerWidth / 2,
-                                    top: window.innerHeight / 2,
-                                    bottom: window.innerHeight / 2
+                                    right: window.lastMouseX || window.innerWidth / 2,
+                                    top: window.lastMouseY || window.innerHeight / 2,
+                                    bottom: window.lastMouseY || window.innerHeight / 2,
+                                    left: window.lastMouseX || window.innerWidth / 2
                                 };
                             }
 
-                            showAiButton(displayRect);
+                            showAiButton(displayRect, event);
                         }
                     }
                     checkingSelection = false;
@@ -1513,7 +1524,7 @@
 
             if (text && text.length > 0) {
                 selectedText = text;
-                //console.log('检测到选中文本:', selectedText);
+                console.log('检测到选中文本:', selectedText);
 
                 // 处理rect为空或尺寸为0的情况
                 if (!rect || (rect.width === 0 && rect.height === 0)) {
@@ -1522,19 +1533,25 @@
                             right: event.clientX,
                             top: event.clientY,
                             bottom: event.clientY,
-                            left: event.clientX
+                            left: event.clientX,
+                            width: 0,
+                            height: 0
                         };
                     } else {
+                        // 使用全局鼠标位置
                         rect = {
-                            right: window.innerWidth / 2,
-                            top: window.innerHeight / 2,
-                            bottom: window.innerHeight / 2,
-                            left: window.innerWidth / 2
+                            right: window.lastMouseX || window.innerWidth / 2,
+                            top: window.lastMouseY || window.innerHeight / 2,
+                            bottom: window.lastMouseY || window.innerHeight / 2,
+                            left: window.lastMouseX || window.innerWidth / 2,
+                            width: 0,
+                            height: 0
                         };
                     }
                 }
 
-                showAiButton(rect);
+                // 传入事件对象，以便获取鼠标位置
+                showAiButton(rect, event);
             } else {
                 hideAiButton();
             }
@@ -1557,8 +1574,8 @@
         }
     });
 
-    // 显示AI按钮
-    function showAiButton(rect) {
+    // 显示AI按钮 - 优化为鼠标附近位置
+    function showAiButton(rect, mouseEvent = null) {
         // 确保只有一个弹窗
         hideAiButton(); // 先隐藏之前的按钮
         hideInputBox(); // 隐藏可能存在的输入框
@@ -1568,217 +1585,261 @@
 
         // 创建AI按钮
         aiButton = document.createElement('div');
+
+        // 优化初始位置计算 - 基于鼠标位置
+        const buttonSize = 30;
+        const margin = 30; // 增加边距，避免紧贴鼠标
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
+
+        let left, top;
+        let mouseX, mouseY;
+
+        // 获取鼠标位置
+        if (mouseEvent && mouseEvent.clientX !== undefined && mouseEvent.clientY !== undefined) {
+            // 使用传入的鼠标事件位置
+            mouseX = mouseEvent.clientX;
+            mouseY = mouseEvent.clientY;
+        } else if (window.lastMouseX !== undefined && window.lastMouseY !== undefined) {
+            // 使用全局记录的鼠标位置
+            mouseX = window.lastMouseX;
+            mouseY = window.lastMouseY;
+        } else {
+            // 回退到选区位置
+            mouseX = rect.right;
+            mouseY = rect.top;
+        }
+
+        // 智能位置计算 - 优先考虑鼠标位置
+        // 水平位置：优先显示在鼠标右侧，空间不足时显示左侧
+        if (mouseX + buttonSize + margin <= viewportWidth) {
+            left = mouseX + margin;
+        } else if (mouseX - buttonSize - margin >= 0) {
+            left = mouseX - buttonSize - margin;
+        } else {
+            // 极端情况：显示在屏幕中央
+            left = (viewportWidth - buttonSize) / 2;
+        }
+
+        // 垂直位置：优先显示在鼠标下方，空间不足时显示上方
+        if (mouseY + buttonSize + margin <= viewportHeight) {
+            top = mouseY + margin;
+        } else if (mouseY - buttonSize - margin >= 0) {
+            top = mouseY - buttonSize - margin;
+        } else {
+            // 极端情况：显示在屏幕中央
+            top = (viewportHeight - buttonSize) / 2;
+        }
+
+        // 确保不超出边界
+        left = Math.max(10, Math.min(left, viewportWidth - buttonSize - 10));
+        top = Math.max(10, Math.min(top, viewportHeight - buttonSize - 10));
+
         aiButton.style.cssText = `
-            position: fixed;
-            left: ${rect.right + 10}px;
-            top: ${rect.top}px;
-            width: 32px;
-            height: 32px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border: 2px solid rgba(255,255,255,0.3);
-            border-radius: 50%;
-            cursor: pointer;
-            z-index: 10000;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            animation: aiButtonSlideIn 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            backdrop-filter: blur(10px);
-        `;
+        position: fixed;
+        left: ${left}px;
+        top: ${top}px;
+        width: ${buttonSize}px;
+        height: ${buttonSize}px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        border: 2px solid rgba(255,255,255,0.3);
+        border-radius: 50%;
+        cursor: pointer;
+        z-index: 10000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4), 0 0 0 2px rgba(102, 126, 234, 0.6);
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        animation: aiButtonSlideIn 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        backdrop-filter: blur(10px);
+    `;
 
         // 修改样式配置，控制所有弹窗大小
         if (!document.getElementById('ai-assistant-style')) {
             const style = document.createElement('style');
             style.id = 'ai-assistant-style';
             style.textContent = `
-        @keyframes aiButtonSlideIn {
-            0% {
-                opacity: 0;
-                transform: scale(0.3) rotate(-180deg);
-            }
-            50% {
-                transform: scale(1.1) rotate(0deg);
-            }
-            100% {
-                opacity: 1;
-                transform: scale(1) rotate(0deg);
-            }
+    @keyframes aiButtonSlideIn {
+        0% {
+            opacity: 0;
+            transform: scale(0.3) rotate(-180deg);
         }
-        @keyframes aiButtonPulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.05); }
+        50% {
+            transform: scale(1.1) rotate(0deg);
         }
-        @keyframes inputBoxSlideIn {
-            0% {
-                opacity: 0;
-                transform: translateY(-20px) scale(0.95);
-                backdrop-filter: blur(0px);
-            }
-            100% {
-                opacity: 1;
-                transform: translateY(0) scale(1);
-                backdrop-filter: blur(20px);
-            }
+        100% {
+            opacity: 1;
+            transform: scale(1) rotate(0deg);
         }
-        @keyframes glowPulse {
-            0%, 100% { box-shadow: 0 0 10px rgba(102, 126, 234, 0.3); }
-            50% { box-shadow: 0 0 20px rgba(102, 126, 234, 0.6), 0 0 25px rgba(118, 75, 162, 0.4); }
+    }
+    @keyframes aiButtonPulse {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.05); }
+    }
+    @keyframes inputBoxSlideIn {
+        0% {
+            opacity: 0;
+            transform: translateY(-20px) scale(0.95);
+            backdrop-filter: blur(0px);
         }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+        100% {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+            backdrop-filter: blur(20px);
         }
-        @keyframes slideInRight {
-            0% {
-                opacity: 0;
-                transform: translateX(20px);
-            }
-            100% {
-                opacity: 1;
-                transform: translateX(0);
-            }
+    }
+    @keyframes glowPulse {
+        0%, 100% { box-shadow: 0 0 10px rgba(102, 126, 234, 0.3); }
+        50% { box-shadow: 0 0 20px rgba(102, 126, 234, 0.6), 0 0 25px rgba(118, 75, 162, 0.4); }
+    }
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    @keyframes slideInRight {
+        0% {
+            opacity: 0;
+            transform: translateX(20px);
         }
-        @keyframes shrinkToCorner {
-            0% {
-                transform: scale(1) translate(0, 0);
-                opacity: 1;
-            }
-            100% {
-                transform: scale(0.5) translate(50%, -50%);
-                opacity: 0.95;
-            }
+        100% {
+            opacity: 1;
+            transform: translateX(0);
         }
-        @keyframes processingWindowSlideIn {
-            0% {
-                transform: translateY(-100%);
-                opacity: 0;
-            }
-            100% {
-                transform: translateY(0);
-                opacity: 1;
-            }
+    }
+    @keyframes shrinkToCorner {
+        0% {
+            transform: scale(1) translate(0, 0);
+            opacity: 1;
         }
-        /* 生成类型选择器样式 */
-        .generation-type-selector {
-            margin-bottom: 12px;
-            padding: 8px;
-            background: rgba(255,255,255,0.03);
-            border-radius: 8px;
-            border: 1px solid rgba(255,255,255,0.1);
+        100% {
+            transform: scale(0.5) translate(50%, -50%);
+            opacity: 0.95;
         }
-        .generation-type-label {
-            font-size: 11px;
-            color: rgba(0,0,0,0.6);
-            margin-bottom: 6px;
-            font-weight: 500;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+    }
+    @keyframes processingWindowSlideIn {
+        0% {
+            transform: translateY(-100%);
+            opacity: 0;
         }
-        .generation-type-options {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
+        100% {
+            transform: translateY(0);
+            opacity: 1;
         }
-        .generation-type-option {
-            padding: 4px 8px;
-            font-size: 11px;
-            background: rgba(255,255,255,0.1);
-            border: 1px solid rgba(255,255,255,0.2);
-            border-radius: 12px;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            color: rgba(0,0,0,0.7);
-            user-select: none;
-        }
-        .generation-type-option:hover {
-            background: rgba(102, 126, 234, 0.2);
-            border-color: rgba(102, 126, 234, 0.4);
-            color: rgba(0,0,0,0.8);
-        }
-        .generation-type-option.selected {
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            border-color: rgba(102, 126, 234, 0.8);
-            color: white;
-        }
-    `;
+    }
+    /* 生成类型选择器样式 */
+    .generation-type-selector {
+        margin-bottom: 12px;
+        padding: 8px;
+        background: rgba(255,255,255,0.03);
+        border-radius: 8px;
+        border: 1px solid rgba(255,255,255,0.1);
+    }
+    .generation-type-label {
+        font-size: 11px;
+        color: rgba(0,0,0,0.6);
+        margin-bottom: 6px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    .generation-type-options {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+    .generation-type-option {
+        padding: 4px 8px;
+        font-size: 11px;
+        background: rgba(255,255,255,0.1);
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 12px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        color: rgba(0,0,0,0.7);
+        user-select: none;
+    }
+    .generation-type-option:hover {
+        background: rgba(102, 126, 234, 0.2);
+        border-color: rgba(102, 126, 234, 0.4);
+        color: rgba(0,0,0,0.8);
+    }
+    .generation-type-option.selected {
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        border-color: rgba(102, 126, 234, 0.8);
+        color: white;
+    }
+`;
             document.head.appendChild(style);
         }
+
         // 创建AI图标
         const aiIcon = document.createElement('div');
         aiIcon.innerHTML = `
-            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center;">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M12 2L13.09 8.26L20 9L13.09 9.74L12 16L10.91 9.74L4 9L10.91 8.26L12 2Z" fill="white" opacity="0.9"/>
-                    <path d="M19 11L19.5 13.5L22 14L19.5 14.5L19 17L18.5 14.5L16 14L18.5 13.5L19 11Z" fill="white" opacity="0.7"/>
-                    <path d="M5 6L5.5 7.5L7 8L5.5 8.5L5 10L4.5 8.5L3 8L4.5 7.5L5 6Z" fill="white" opacity="0.7"/>
-                </svg>
-                <div style="font-size: 8px; color: white; font-weight: 600; margin-top: 1px; letter-spacing: 0.2px;">AI</div>
-            </div>
-        `;
+        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center;">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 2L13.09 8.26L20 9L13.09 9.74L12 16L10.91 9.74L4 9L10.91 8.26L12 2Z" fill="white" opacity="0.9"/>
+                <path d="M19 11L19.5 13.5L22 14L19.5 14.5L19 17L18.5 14.5L16 14L18.5 13.5L19 11Z" fill="white" opacity="0.7"/>
+                <path d="M5 6L5.5 7.5L7 8L5.5 8.5L5 10L4.5 8.5L3 8L4.5 7.5L5 6Z" fill="white" opacity="0.7"/>
+            </svg>
+            <div style="font-size: 8px; color: white; font-weight: 600; margin-top: 1px; letter-spacing: 0.2px;">AI</div>
+        </div>
+    `;
         aiIcon.style.cssText = `
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            animation: glowPulse 2s ease-in-out infinite;
-        `;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        animation: glowPulse 2s ease-in-out infinite;
+    `;
 
         aiButton.appendChild(aiIcon);
 
         // 悬停效果
         aiButton.addEventListener('mouseenter', function () {
             this.style.transform = 'scale(1.1)';
-            this.style.boxShadow = '0 6px 20px rgba(102, 126, 234, 0.6)';
+            this.style.boxShadow = '0 6px 20px rgba(102, 126, 234, 0.6), 0 0 0 2px rgba(102, 126, 234, 0.8)';
             this.style.animation = 'aiButtonPulse 1s ease-in-out infinite';
         });
 
         aiButton.addEventListener('mouseleave', function () {
             this.style.transform = 'scale(1)';
-            this.style.boxShadow = '0 4px 15px rgba(102, 126, 234, 0.4)';
+            this.style.boxShadow = '0 4px 15px rgba(102, 126, 234, 0.4), 0 0 0 2px rgba(102, 126, 234, 0.6)';
             this.style.animation = 'glowPulse 2s ease-in-out infinite';
         });
 
         // 点击事件
         aiButton.addEventListener('click', function (e) {
             e.stopPropagation();
-            showInputBox(rect);
+            showInputBox({
+                left: left,
+                top: top,
+                bottom: top + buttonSize,
+                right: left + buttonSize
+            });
         });
 
         document.body.appendChild(aiButton);
-
-        // 调整按钮位置
-        adjustAiButtonPosition();
     }
 
-    // 调整AI按钮位置
+
+
     function adjustAiButtonPosition() {
+        // 可以保留这个函数用于特殊情况的微调，但通常不需要了
         if (!aiButton) return;
 
         const rect = aiButton.getBoundingClientRect();
         const viewportWidth = window.innerWidth;
         const viewportHeight = window.innerHeight;
+        const margin = 10;
 
-        let left = parseInt(aiButton.style.left);
-        let top = parseInt(aiButton.style.top);
+        // 只在极端情况下进行微调
+        if (rect.right > viewportWidth || rect.bottom > viewportHeight || rect.left < 0 || rect.top < 0) {
+            let left = Math.max(margin, Math.min(parseInt(aiButton.style.left), viewportWidth - rect.width - margin));
+            let top = Math.max(margin, Math.min(parseInt(aiButton.style.top), viewportHeight - rect.height - margin));
 
-        // 如果右边超出屏幕，移到选中文本左侧
-        if (rect.right > viewportWidth - 20) {
-            left = left - 52;
+            aiButton.style.left = left + 'px';
+            aiButton.style.top = top + 'px';
         }
-
-        // 如果下方超出屏幕，向上调整
-        if (rect.bottom > viewportHeight - 20) {
-            top = viewportHeight - 52;
-        }
-
-        // 如果上方超出屏幕，向下调整
-        if (top < 20) {
-            top = 20;
-        }
-
-        aiButton.style.left = left + 'px';
-        aiButton.style.top = top + 'px';
     }
 
     // 隐藏AI按钮
