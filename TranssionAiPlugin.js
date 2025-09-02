@@ -491,7 +491,7 @@
             获取全文
         `;
         mdButton.className = "feishu-md-button primary";
-        mdButton.style.visibility = "hidden";
+        //mdButton.style.visibility = "hidden";
         // 暂时不开放
         document.body.appendChild(mdButton);
 
